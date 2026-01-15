@@ -2,7 +2,11 @@ from src.graph import build_graph
 from src.database import MarketDB, TraderDB
 from src.market_data import MarketDataLoader
 from src.news import fetch_market_news
+from src.semantic import NewsProcessor
 import time
+
+# 初始化语义处理器
+news_processor = NewsProcessor()
 
 def run_live_cycle(ticker: str):
     print(f"\n========== 实盘交易循环: {ticker} ==========")
@@ -30,6 +34,10 @@ def run_live_cycle(ticker: str):
     print(f"[系统] 正在扫描 {ticker} 的新闻线...")
     news = fetch_market_news(f"{ticker} stock news")
     print(f"[新闻] 找到 {len(news)} 篇近期文章。")
+
+    # 语义预览
+    features = news_processor.process_batch(news)
+    print(f"[语义层] 情绪: {features['sentiment_score']:.2f} | 置信度: {features['confidence']:.2f} | 主题: {features['topics']}")
 
     # 4. 初始化状态
     initial_state = {

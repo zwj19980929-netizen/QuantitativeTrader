@@ -2,42 +2,12 @@ from src.state import AgentState
 from src.tools import calculate_technical_indicators
 from src.database import TraderDB
 from src.memory import VectorMemory
+from src.semantic import NewsProcessor
 import pandas as pd
 import random
 
-def analyze_sentiment(news_list):
-    """
-    基于关键词的简单新闻情绪分析。
-    返回 -1.0 (负面) 到 1.0 (正面) 的分数。
-    """
-    if not news_list:
-        return 0.0
-
-    score = 0
-    total = 0
-
-    # 模拟情绪字典
-    positive_words = ["soar", "surge", "jump", "record", "growth", "buy", "outperform", "beat", "higher"]
-    negative_words = ["plunge", "crash", "drop", "miss", "loss", "sell", "down", "lower", "lawsuit", "investigation"]
-
-    for item in news_list:
-        text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
-        if not text.strip():
-            continue
-
-        total += 1
-        found_pos = sum(1 for w in positive_words if w in text)
-        found_neg = sum(1 for w in negative_words if w in text)
-
-        if found_pos > found_neg:
-            score += 1
-        elif found_neg > found_pos:
-            score -= 1
-
-    if total == 0:
-        return 0.0
-
-    return score / total # 归一化到 -1 到 1
+# 初始化语义处理器 (含缓存)
+news_processor = NewsProcessor()
 
 def strategist_node(state: AgentState) -> AgentState:
     print(f"--- [策略研究员] 正在分析 {state['ticker']} ---")
@@ -53,43 +23,64 @@ def strategist_node(state: AgentState) -> AgentState:
     rsi = analysis["rsi_14"]
     price = analysis["current_price"]
 
-    # 2. 新闻情绪分析
-    news_score = analyze_sentiment(state.get("news", []))
-    print(f"--- [策略研究员] 技术面: RSI={rsi:.2f} | 消息面情绪: {news_score:.2f} ---")
+    # 2. 语义分析 (从“漏斗”中提取特征)
+    news_list = state.get("news", [])
+    semantic_features = news_processor.process_batch(news_list)
 
-    # 3. 混合决策逻辑
+    news_score = semantic_features["sentiment_score"]
+    confidence = semantic_features["confidence"]
+    topics = semantic_features["topics"]
+
+    print(f"--- [策略研究员] 技术面: RSI={rsi:.2f} | 语义特征: 情绪={news_score:.2f}, 置信度={confidence:.2f}, 主题={topics} ---")
+
+    # 3. 混合决策逻辑 (逻辑驱动)
     signal = {"action": "HOLD", "confidence": 0.0, "reason": "中性市场"}
 
-    # 条件: 买入 (BUY)
-    # 技术面: RSI < 40 (超卖) 或 金叉 (通常由价格行为暗示，这里简化)
-    # 基本面: 情绪 > -0.2 (不算太差)
-    if rsi < 40 and news_score > -0.5:
-        signal = {
-            "action": "BUY",
-            "confidence": 0.8,
-            "reason": f"超卖 (RSI {rsi:.2f}) 且情绪尚可 ({news_score:.2f})"
-        }
-    # 条件: 卖出 (SELL)
-    # 技术面: RSI > 70
-    # 或 情绪非常糟糕 (< -0.5)
-    elif rsi > 70:
-        signal = {
+    # --- 基础评分系统 ---
+    base_confidence = 0.5
+
+    # 规则 1: 财报季动量 (Earnings Momentum)
+    if "Earnings" in topics:
+        if news_score > 0.3:
+            signal = {
+                "action": "BUY",
+                "confidence": 0.8 * confidence, # 根据 LLM 置信度加权
+                "reason": f"财报超预期驱动 (情绪 {news_score:.2f})"
+            }
+        elif news_score < -0.3:
+            signal = {
+                "action": "SELL",
+                "confidence": 0.9 * confidence,
+                "reason": f"财报不及预期 (情绪 {news_score:.2f})"
+            }
+
+    # 规则 2: 超卖/超买回归 (Mean Reversion)
+    elif rsi < 30: # 深度超卖
+        # 只要新闻不是极度负面，就尝试抄底
+        if news_score > -0.6:
+            signal = {
+                "action": "BUY",
+                "confidence": 0.7,
+                "reason": f"深度超卖 (RSI {rsi:.2f}) 且基本面未恶化"
+            }
+    elif rsi > 70: # 超买
+         signal = {
             "action": "SELL",
-            "confidence": 0.8,
-            "reason": f"超买 (RSI {rsi:.2f})"
+            "confidence": 0.7,
+            "reason": f"技术面超买 (RSI {rsi:.2f})"
         }
-    elif news_score < -0.5:
-        signal = {
-            "action": "SELL",
-            "confidence": 0.9,
-            "reason": f"负面新闻情绪 ({news_score:.2f})"
-        }
-    elif news_score > 0.5:
-        signal = {
-            "action": "BUY",
-            "confidence": 0.6,
-            "reason": f"正面新闻驱动 ({news_score:.2f})"
-        }
+
+    # 规则 3: 宏观恐慌 (Macro Panic)
+    if "Macro" in topics and news_score < -0.5:
+        # 即使 RSI 低，如果宏观环境极差，也要卖出或观望
+        if signal["action"] == "BUY":
+            signal = {"action": "HOLD", "confidence": 0.0, "reason": "宏观环境恶劣，取消抄底"}
+        else:
+            signal = {
+                "action": "SELL",
+                "confidence": 0.8,
+                "reason": "宏观恐慌情绪抛售"
+            }
 
     state["signal"] = signal
     print(f"--- [策略研究员] 生成信号: {signal['action']} ({signal['reason']}) ---")
@@ -114,8 +105,10 @@ def risk_manager_node(state: AgentState) -> AgentState:
     db = TraderDB()
     memory = VectorMemory(db)
 
-    # 重新计算新闻分数用于检索上下文
-    news_score = analyze_sentiment(state.get("news", []))
+    # 获取语义特征
+    news_list = state.get("news", [])
+    semantic_features = news_processor.process_batch(news_list)
+    news_score = semantic_features["sentiment_score"]
 
     relevant_memories = memory.retrieve_relevant_memories(analysis, news_score)
 
@@ -212,7 +205,10 @@ def critic_node(state: AgentState) -> AgentState:
     db = TraderDB()
     memory = VectorMemory(db)
 
-    news_score = analyze_sentiment(state.get("news", []))
+    # 获取语义特征
+    news_list = state.get("news", [])
+    semantic_features = news_processor.process_batch(news_list)
+    news_score = semantic_features["sentiment_score"]
     analysis = state.get("analysis", {})
 
     if exec_res:

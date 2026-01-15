@@ -5,8 +5,11 @@ from src.graph import build_graph
 from src.database import MarketDB, TraderDB
 from src.market_data import MarketDataLoader
 from src.news import fetch_market_news
-from src.agents import analyze_sentiment
+from src.semantic import NewsProcessor
 import time
+
+# 初始化语义处理器
+news_processor = NewsProcessor()
 
 # 设置页面配置
 st.set_page_config(page_title="量化智能体驾驶舱", layout="wide")
@@ -50,8 +53,16 @@ if run_btn:
         # 2. 获取新闻
         st.write(f"📰 扫描 {ticker} 全球新闻...")
         news = fetch_market_news(f"{ticker} stock news")
-        sentiment_score = analyze_sentiment(news)
-        st.write(f"📊 新闻情绪分: {sentiment_score:.2f}")
+
+        # 语义层处理
+        st.write("🧠 语义蒸馏 (LLM + 缓存)...")
+        semantic_features = news_processor.process_batch(news)
+        sentiment_score = semantic_features["sentiment_score"]
+        confidence = semantic_features["confidence"]
+        topics = semantic_features["topics"]
+
+        st.write(f"📊 情绪分: {sentiment_score:.2f} | 置信度: {confidence:.2f}")
+        st.caption(f"提取主题: {', '.join(topics)}")
 
         # 3. 运行智能体
         st.write("🧠 唤醒智能体集群...")
