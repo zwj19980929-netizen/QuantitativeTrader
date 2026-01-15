@@ -5,8 +5,8 @@ import random
 
 def analyze_sentiment(news_list):
     """
-    Simple keyword-based sentiment analysis on news headlines.
-    Returns a score from -1.0 (Negative) to 1.0 (Positive).
+    基于关键词的简单新闻情绪分析。
+    返回 -1.0 (负面) 到 1.0 (正面) 的分数。
     """
     if not news_list:
         return 0.0
@@ -14,7 +14,7 @@ def analyze_sentiment(news_list):
     score = 0
     total = 0
 
-    # Mock sentiment dictionary
+    # 模拟情绪字典
     positive_words = ["soar", "surge", "jump", "record", "growth", "buy", "outperform", "beat", "higher"]
     negative_words = ["plunge", "crash", "drop", "miss", "loss", "sell", "down", "lower", "lawsuit", "investigation"]
 
@@ -35,102 +35,102 @@ def analyze_sentiment(news_list):
     if total == 0:
         return 0.0
 
-    return score / total # Normalize to -1 to 1
+    return score / total # 归一化到 -1 到 1
 
 def strategist_node(state: AgentState) -> AgentState:
-    print(f"--- [Strategist] Analyzing {state['ticker']} ---")
+    print(f"--- [策略研究员] 正在分析 {state['ticker']} ---")
 
-    # 1. Technical Analysis
+    # 1. 技术分析
     analysis = calculate_technical_indicators(state["data"])
     state["analysis"] = analysis
 
     if not analysis:
-        print("--- [Strategist] Not enough data. ---")
+        print("--- [策略研究员] 数据不足。 ---")
         return state
 
     rsi = analysis["rsi_14"]
     price = analysis["current_price"]
 
-    # 2. News Sentiment Analysis
+    # 2. 新闻情绪分析
     news_score = analyze_sentiment(state.get("news", []))
-    print(f"--- [Strategist] Tech: RSI={rsi:.2f} | News Sentiment: {news_score:.2f} ---")
+    print(f"--- [策略研究员] 技术面: RSI={rsi:.2f} | 消息面情绪: {news_score:.2f} ---")
 
-    # 3. Hybrid Decision Logic
-    signal = {"action": "HOLD", "confidence": 0.0, "reason": "Neutral"}
+    # 3. 混合决策逻辑
+    signal = {"action": "HOLD", "confidence": 0.0, "reason": "中性市场"}
 
-    # Condition: BUY
-    # Technical: RSI < 40 (Oversold) OR Golden Cross (implied by price action usually, simplified here)
-    # Fundamental: Sentiment > -0.2 (Not terrible)
+    # 条件: 买入 (BUY)
+    # 技术面: RSI < 40 (超卖) 或 金叉 (通常由价格行为暗示，这里简化)
+    # 基本面: 情绪 > -0.2 (不算太差)
     if rsi < 40 and news_score > -0.5:
         signal = {
             "action": "BUY",
             "confidence": 0.8,
-            "reason": f"Oversold (RSI {rsi:.2f}) & Sentiment OK ({news_score:.2f})"
+            "reason": f"超卖 (RSI {rsi:.2f}) 且情绪尚可 ({news_score:.2f})"
         }
-    # Condition: SELL
-    # Technical: RSI > 70
-    # OR Sentiment is very bad (< -0.5)
+    # 条件: 卖出 (SELL)
+    # 技术面: RSI > 70
+    # 或 情绪非常糟糕 (< -0.5)
     elif rsi > 70:
         signal = {
             "action": "SELL",
             "confidence": 0.8,
-            "reason": f"Overbought (RSI {rsi:.2f})"
+            "reason": f"超买 (RSI {rsi:.2f})"
         }
     elif news_score < -0.5:
         signal = {
             "action": "SELL",
             "confidence": 0.9,
-            "reason": f"Negative News Sentiment ({news_score:.2f})"
+            "reason": f"负面新闻情绪 ({news_score:.2f})"
         }
     elif news_score > 0.5:
         signal = {
             "action": "BUY",
             "confidence": 0.6,
-            "reason": f"Positive News Momentum ({news_score:.2f})"
+            "reason": f"正面新闻驱动 ({news_score:.2f})"
         }
 
     state["signal"] = signal
-    print(f"--- [Strategist] Signal: {signal['action']} ({signal['reason']}) ---")
+    print(f"--- [策略研究员] 生成信号: {signal['action']} ({signal['reason']}) ---")
     return state
 
 def risk_manager_node(state: AgentState) -> AgentState:
-    print("--- [Risk Manager] Reviewing Signal ---")
+    print("--- [风控官] 正在审核信号 ---")
     signal = state.get("signal")
 
     if not signal or signal["action"] == "HOLD":
-        state["risk_assessment"] = {"approved": False, "reason": "No signal"}
+        state["risk_assessment"] = {"approved": False, "reason": "无操作信号"}
         return state
 
-    # Check Long-term Memory for past lessons
-    # (In a real system, we'd embed the current state and query vector DB.
-    # Here we just check latest reflections for keywords)
+    # 检查长期记忆中的过往教训
+    # (在真实系统中，我们会嵌入当前状态并查询向量数据库。
+    # 这里我们只检查最近反思中的关键词)
 
-    db = TraderDB() # Connect to DB
+    db = TraderDB() # 连接数据库
     recent_reflections = db.get_latest_reflections(limit=3)
 
     caution_flag = False
     for ref in recent_reflections:
         if "risk" in ref["content"].lower() and ref["rating"] < 3:
-            print(f"--- [Risk Manager] Recall: {ref['content']} ---")
+            print(f"--- [风控官] 回忆起: {ref['content']} ---")
             caution_flag = True
 
     analysis = state["analysis"]
     rsi = analysis.get("rsi_14", 50)
 
-    assessment = {"approved": True, "reason": "Checks passed"}
+    assessment = {"approved": True, "reason": "风控通过"}
 
     if signal["action"] == "BUY":
         if rsi > 75:
-             assessment = {"approved": False, "reason": "RSI too high for BUY"}
+             assessment = {"approved": False, "reason": "RSI 过高，禁止追高"}
         elif caution_flag and random.random() < 0.5:
-             assessment = {"approved": False, "reason": "Cautious due to past poor performance."}
+             assessment = {"approved": False, "reason": "由于过往表现不佳，谨慎行事，拒绝交易。"}
 
     state["risk_assessment"] = assessment
-    print(f"--- [Risk Manager] {assessment['approved']} ({assessment['reason']}) ---")
+    print(f"--- [风控官] 决策: {'批准' if assessment['approved'] else '拒绝'} ({assessment['reason']}) ---")
     return state
 
 def executor_node(state: AgentState) -> AgentState:
-    print("--- [Executor] Executing ---")
+    print("--- [交易执行官] 正在执行 ---")
     risk = state.get("risk_assessment")
     if not risk or not risk["approved"]:
         return state
@@ -138,13 +138,13 @@ def executor_node(state: AgentState) -> AgentState:
     signal = state["signal"]
     price = state["analysis"]["current_price"]
 
-    # Log trade to DB
+    # 记录交易到数据库
     db = TraderDB()
     db.log_trade(
         ticker=state["ticker"],
         action=signal["action"],
         price=price,
-        shares=10, # Fixed size for now
+        shares=10, # 暂时固定手数
         reason=signal["reason"]
     )
 
@@ -156,11 +156,11 @@ def executor_node(state: AgentState) -> AgentState:
         "shares": 10
     }
     state["execution_result"] = result
-    print(f"--- [Executor] Trade Logged: {signal['action']} @ {price:.2f} ---")
+    print(f"--- [交易执行官] 交易已记录: {signal['action']} @ {price:.2f} ---")
     return state
 
 def critic_node(state: AgentState) -> AgentState:
-    print("--- [Critic] Reflecting ---")
+    print("--- [复盘分析师] 正在复盘 ---")
 
     exec_res = state.get("execution_result")
     risk = state.get("risk_assessment")
@@ -168,17 +168,17 @@ def critic_node(state: AgentState) -> AgentState:
     db = TraderDB()
 
     if exec_res:
-        reflection = f"Executed {exec_res['action']} on {state['ticker']}. Market Sentiment was {analyze_sentiment(state.get('news')):.2f}."
+        reflection = f"在 {state['ticker']} 执行了 {exec_res['action']}。当时的市场情绪分数为 {analyze_sentiment(state.get('news')):.2f}。"
         rating = 4
     elif risk and not risk["approved"]:
-        reflection = f"Risk blocked trade on {state['ticker']}: {risk['reason']}. Good discipline."
+        reflection = f"风控拦截了 {state['ticker']} 的交易: {risk['reason']}。纪律性很好。"
         rating = 5
     else:
-        reflection = f"No action on {state['ticker']}."
+        reflection = f"{state['ticker']} 无操作。"
         rating = 3
 
-    # Save to Memory
+    # 保存到记忆
     db.add_reflection(reflection, rating)
     state["critique"] = {"feedback": reflection, "rating": rating}
-    print(f"--- [Critic] Memory Saved: {reflection} ---")
+    print(f"--- [复盘分析师] 记忆已保存: {reflection} ---")
     return state

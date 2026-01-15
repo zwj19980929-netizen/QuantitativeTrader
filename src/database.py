@@ -5,7 +5,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timezone
 import os
 
-# --- Market Data (DuckDB) ---
+# --- 市场数据 (DuckDB) ---
 class MarketDB:
     def __init__(self, db_path="market_data.ddb"):
         self.conn = duckdb.connect(db_path)
@@ -27,29 +27,29 @@ class MarketDB:
 
     def save_data(self, ticker: str, df: pd.DataFrame):
         """
-        Saves OHLCV dataframe to DuckDB.
-        Expects index to be Date/Timestamp or a column named 'Date'.
+        保存 OHLCV 数据框到 DuckDB。
+        期望索引为 Date/Timestamp 或包含名为 'Date' 的列。
         """
-        # Ensure date is a column
+        # 确保日期是一列
         df_copy = df.copy()
         if "Date" not in df_copy.columns:
             df_copy.reset_index(inplace=True)
 
-        # Add ticker column
+        # 添加代码列
         df_copy["ticker"] = ticker
 
-        # Standardize columns
+        # 标准化列名
         df_copy = df_copy.rename(columns={
             "Date": "date", "Open": "open", "High": "high",
             "Low": "low", "Close": "close", "Volume": "volume"
         })
 
-        # Select only relevant columns to avoid schema mismatch
+        # 仅选择相关列以避免架构不匹配
         df_copy = df_copy[["ticker", "date", "open", "high", "low", "close", "volume"]]
 
-        # Upsert (DuckDB doesn't have simple UPSERT for batch insert easily via Python API in older versions,
-        # but INSERT OR REPLACE or DELETE+INSERT works).
-        # For simplicity and speed in this project: Delete existing range then insert.
+        # 更新插入 (Upsert)
+        # DuckDB 旧版本 Python API 没有简单的 UPSERT。
+        # 为了简单和速度：删除现有范围然后插入。
 
         min_date = df_copy["date"].min()
         max_date = df_copy["date"].max()
@@ -62,7 +62,7 @@ class MarketDB:
         self.conn.register("df_view", df_copy)
         self.conn.execute("INSERT INTO ohlcv SELECT * FROM df_view")
         self.conn.unregister("df_view")
-        print(f"Stored {len(df_copy)} rows for {ticker} in MarketDB.")
+        print(f"已在 MarketDB 中存储 {len(df_copy)} 行数据 ({ticker})。")
 
     def load_data(self, ticker: str, limit: int = 100) -> pd.DataFrame:
         query = f"""
@@ -76,11 +76,11 @@ class MarketDB:
         if not df.empty:
             df.set_index("date", inplace=True)
             df.sort_index(inplace=True)
-            # Rename back to capitalized for compatibility with tools
+            # 重命名回首字母大写，以兼容工具函数
             df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
         return df
 
-# --- Trader Data (SQLite via SQLAlchemy) ---
+# --- 交易数据 (SQLite via SQLAlchemy) ---
 Base = declarative_base()
 
 class Trade(Base):
@@ -113,7 +113,7 @@ class TraderDB:
         session.add(trade)
         session.commit()
         session.close()
-        print(f"Trade logged: {action} {ticker} @ {price}")
+        print(f"交易已记录: {action} {ticker} @ {price}")
 
     def add_reflection(self, content, rating, meta=None):
         session = self.Session()

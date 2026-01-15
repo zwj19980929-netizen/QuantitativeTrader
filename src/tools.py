@@ -3,24 +3,24 @@ import pandas_ta as ta
 
 def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     """
-    Calculates technical indicators using pandas_ta.
-    Returns the latest values for decision making.
+    使用 pandas_ta 计算技术指标。
+    返回最新的指标值用于决策。
     """
-    # Ensure we have enough data
+    # 确保数据足够
     if len(df) < 50:
         return {}
 
-    # Calculate RSI
+    # 计算 RSI (相对强弱指数)
     df.ta.rsi(length=14, append=True)
 
-    # Calculate SMA
+    # 计算 SMA (简单移动平均线)
     df.ta.sma(length=20, append=True)
     df.ta.sma(length=50, append=True)
 
-    # Get the latest row
+    # 获取最新一行数据
     latest = df.iloc[-1]
 
-    # Previous row for trend detection
+    # 获取前一行数据用于趋势检测
     prev = df.iloc[-2]
 
     return {

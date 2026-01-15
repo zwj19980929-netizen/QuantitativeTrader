@@ -8,14 +8,14 @@ class MarketDataLoader:
 
     def fetch_and_store(self, ticker: str, period="1y"):
         """
-        Fetches data from Yahoo Finance and stores it in DuckDB.
+        从 Yahoo Finance 获取数据并存储到 DuckDB。
         """
-        print(f"Fetching {period} data for {ticker} from Yahoo Finance...")
-        # yfinance download
+        print(f"正在从 Yahoo Finance 获取 {ticker} 的 {period} 数据...")
+        # yfinance 下载
         df = yf.download(ticker, period=period, progress=False, multi_level_index=False)
 
         if df.empty:
-            print(f"No data found for {ticker}.")
+            print(f"未找到 {ticker} 的数据。")
             return False
 
         self.db.save_data(ticker, df)
@@ -23,7 +23,7 @@ class MarketDataLoader:
 
     def get_latest_data(self, ticker: str) -> pd.DataFrame:
         """
-        Retrieves data from DB. If empty, tries to fetch first.
+        从数据库检索数据。如果为空，则先尝试获取。
         """
         df = self.db.load_data(ticker)
         if df.empty:
