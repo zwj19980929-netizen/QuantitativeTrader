@@ -67,3 +67,32 @@ class MarketDataLoader:
 
         # 2. 从 DB 加载
         return self.db.load_data(ticker)
+
+    def import_external_data(self, ticker: str, df: pd.DataFrame):
+        """
+        导入外部数据（例如用户自定义爬虫的数据）。
+        df 必须包含 Open, High, Low, Close, Volume 列，索引为 Date。
+        """
+        print(f"[数据中心] 正在导入 {ticker} 的外部数据...")
+        if df.empty:
+            print("警告: 导入的数据为空。")
+            return
+
+        # 简单的列名标准化尝试
+        rename_map = {
+            "date": "Date", "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume",
+            "日期": "Date", "开盘": "Open", "最高": "High", "最低": "Low", "收盘": "Close", "成交量": "Volume"
+        }
+        df = df.rename(columns=rename_map)
+
+        if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"])
+            df = df.set_index("Date")
+
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        if not all(col in df.columns for col in required):
+            print(f"错误: 数据缺少必要的列。需要: {required}, 实际: {df.columns}")
+            return
+
+        self.db.save_data(ticker, df)
+        print(f"[数据中心] 成功导入 {len(df)} 行数据到数据库。")

@@ -1,24 +1,38 @@
 import pandas as pd
-import pandas_ta as ta
+from ta.momentum import RSIIndicator
+from ta.trend import SMAIndicator
+from ta.volatility import AverageTrueRange
 
 def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     """
-    使用 pandas_ta 计算技术指标。
+    使用 ta 库计算技术指标 (替代 pandas_ta)。
     返回最新的指标值用于决策。
     """
     # 确保数据足够
     if len(df) < 50:
         return {}
 
+    # 确保列名正确 (ta 库通常需要 Close, High, Low)
+    # 我们的 df 应该已经有这些列 (首字母大写)
+
+    close = df["Close"]
+    high = df["High"]
+    low = df["Low"]
+
     # 计算 RSI (相对强弱指数)
-    df.ta.rsi(length=14, append=True)
+    rsi_indicator = RSIIndicator(close=close, window=14)
+    df["RSI_14"] = rsi_indicator.rsi()
 
     # 计算 SMA (简单移动平均线)
-    df.ta.sma(length=20, append=True)
-    df.ta.sma(length=50, append=True)
+    sma20_indicator = SMAIndicator(close=close, window=20)
+    df["SMA_20"] = sma20_indicator.sma_indicator()
 
-    # 计算 ATR (平均真实波幅) 用于波动率风控
-    df.ta.atr(length=14, append=True)
+    sma50_indicator = SMAIndicator(close=close, window=50)
+    df["SMA_50"] = sma50_indicator.sma_indicator()
+
+    # 计算 ATR (平均真实波幅)
+    atr_indicator = AverageTrueRange(high=high, low=low, close=close, window=14)
+    df["ATRr_14"] = atr_indicator.average_true_range()
 
     # 获取最新一行数据
     latest = df.iloc[-1]
@@ -31,7 +45,7 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
         "rsi_14": latest["RSI_14"],
         "sma_20": latest["SMA_20"],
         "sma_50": latest["SMA_50"],
-        "atr_14": latest["ATRr_14"], # pandas_ta ATR 列名通常是 ATRr_14 或 ATR_14，取决于版本，通常是 ATR_14 但有时带r
+        "atr_14": latest["ATRr_14"],
         "prev_sma_20": prev["SMA_20"],
         "prev_sma_50": prev["SMA_50"]
     }

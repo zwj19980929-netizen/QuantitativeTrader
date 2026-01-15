@@ -1,7 +1,7 @@
 langgraph
-pandas
-pandas_ta
-numpy
+pandas<2.2
+ta
+numpy<2
 yfinance
 duckdb
 duckduckgo-search
@@ -13,7 +13,3 @@ textblob
 openai
 akshare
 baostock
-requests>=2.31
-pyarrow>=14.0
-tqdm>=4.66
-
