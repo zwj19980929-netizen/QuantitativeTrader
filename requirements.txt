@@ -13,3 +13,7 @@ textblob
 openai
 akshare
 baostock
+requests>=2.31
+pyarrow>=14.0
+tqdm>=4.66
+
