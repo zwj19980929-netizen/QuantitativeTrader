@@ -50,13 +50,15 @@ graph TD
 *   **MarketDB (基于 DuckDB)**
     *   **用途**：存储 OHLCV（开高低收量）行情数据。
     *   **特点**：列式存储，极速查询分析，适合处理数百万行 K 线数据。
+
+### 2. 真实数据源 (多源聚合)
+本项目采用了抗限流的多源策略，自动路由请求：
+*   **A股数据**: 优先使用 **AKShare** (源自东方财富/新浪)，备用 **Baostock**。
+*   **美股数据**: 优先使用 **AKShare** (源自东方财富)，备用 **SinaDirect** (直连新浪接口)，最后回退到 **YFinance**。
+*   **新闻**: 接入 `duckduckgo_search` 实时检索。
 *   **TraderDB (基于 SQLite + SQLAlchemy)**
     *   **用途**：存储交易日志（Trades）、持仓（Positions）和智能体记忆（Reflections）。
     *   **特点**：轻量级，支持事务，易于管理。
-
-### 2. 真实数据源
-*   **行情**：接入 `yfinance`，获取美股实时数据。
-*   **新闻**：接入 `duckduckgo_search`，实时检索全球财经新闻。
 
 ---
 
@@ -82,10 +84,21 @@ pip install -r requirements.txt
 本项目设计为模块化运行。直接运行主入口，它会启动一个针对 `AAPL` (苹果公司) 的完整交易决策循环：
 
 ```bash
-python -m src.main
+# 单次运行
+python -m src.main --ticker AAPL
+
+# 循环模式 (每5分钟运行一次)
+python -m src.main --ticker AAPL --loop --interval 300
 ```
 
-### 3. 预期输出
+### 3. 额外工具：东方财富爬虫 (学习用)
+如果你想抓取特定的量化数据（如板块资金流向、个股研报），可以运行独立的爬虫工具：
+```bash
+python src/crawl_eastmoney.py
+```
+*注：此脚本仅作学习演示，不参与主程序的自动交易逻辑。*
+
+### 4. 预期输出
 你将看到控制台输出智能体之间的完整对话：
 
 ```text
