@@ -11,3 +11,5 @@ plotly
 scikit-learn
 textblob
 openai
+akshare
+baostock
