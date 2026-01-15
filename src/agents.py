@@ -1,6 +1,8 @@
 from src.state import AgentState
 from src.tools import calculate_technical_indicators
 from src.database import TraderDB
+from src.memory import VectorMemory
+import pandas as pd
 import random
 
 def analyze_sentiment(news_list):
@@ -101,32 +103,72 @@ def risk_manager_node(state: AgentState) -> AgentState:
         state["risk_assessment"] = {"approved": False, "reason": "无操作信号"}
         return state
 
-    # 检查长期记忆中的过往教训
-    # (在真实系统中，我们会嵌入当前状态并查询向量数据库。
-    # 这里我们只检查最近反思中的关键词)
+    # 获取市场数据
+    analysis = state["analysis"]
+    price = analysis.get("current_price", 100.0)
+    atr = analysis.get("atr_14", price * 0.02) # 默认 2% 波动率如果 ATR 缺失
+    if pd.isna(atr): atr = price * 0.02
 
-    db = TraderDB() # 连接数据库
-    recent_reflections = db.get_latest_reflections(limit=3)
+    # --- 1. 记忆检索 (Memory Recall) ---
+    # 使用 VectorMemory 进行情境感知检索
+    db = TraderDB()
+    memory = VectorMemory(db)
+
+    # 重新计算新闻分数用于检索上下文
+    news_score = analyze_sentiment(state.get("news", []))
+
+    relevant_memories = memory.retrieve_relevant_memories(analysis, news_score)
 
     caution_flag = False
-    for ref in recent_reflections:
-        if "risk" in ref["content"].lower() and ref["rating"] < 3:
-            print(f"--- [风控官] 回忆起: {ref['content']} ---")
+    for mem in relevant_memories:
+        print(f"--- [风控官] 联想到相似历史 (Sim={mem['similarity']:.2f}): {mem['content']} ---")
+        if mem["rating"] < 3:
             caution_flag = True
 
-    analysis = state["analysis"]
+    # --- 2. 核心风控规则 ---
     rsi = analysis.get("rsi_14", 50)
-
-    assessment = {"approved": True, "reason": "风控通过"}
+    approved = True
+    reason = "风控通过"
 
     if signal["action"] == "BUY":
         if rsi > 75:
-             assessment = {"approved": False, "reason": "RSI 过高，禁止追高"}
-        elif caution_flag and random.random() < 0.5:
-             assessment = {"approved": False, "reason": "由于过往表现不佳，谨慎行事，拒绝交易。"}
+             approved = False
+             reason = "RSI 过高 (>75)，禁止追高"
+        elif caution_flag:
+             # 如果有历史教训，我们要么拒绝，要么减半仓位。这里为了演示选择收紧。
+             reason += " (基于历史教训，仓位减半)"
+
+    # --- 3. 动态仓位管理 (Volatility Sizing) ---
+    # 假设账户资金 $100,000
+    account_equity = 100000.0
+    risk_per_trade_pct = 0.01 # 单笔亏损不超过 1%
+    risk_budget = account_equity * risk_per_trade_pct # $1000
+
+    # 止损距离设为 2倍 ATR
+    stop_loss_dist = 2 * atr
+
+    # 凯利公式/波动率平价计算股数
+    # Shares = Risk Budget / Risk Per Share
+    if stop_loss_dist > 0:
+        target_shares = int(risk_budget / stop_loss_dist)
+    else:
+        target_shares = 0
+
+    # 如果有历史教训，仓位减半
+    if caution_flag:
+        target_shares = int(target_shares * 0.5)
+
+    if not approved:
+        target_shares = 0
+
+    assessment = {
+        "approved": approved,
+        "target_shares": target_shares,
+        "reason": f"{reason} | ATR={atr:.2f}, 目标仓位={target_shares}股"
+    }
 
     state["risk_assessment"] = assessment
-    print(f"--- [风控官] 决策: {'批准' if assessment['approved'] else '拒绝'} ({assessment['reason']}) ---")
+    print(f"--- [风控官] 决策: {'批准' if approved else '拒绝'} ({assessment['reason']}) ---")
     return state
 
 def executor_node(state: AgentState) -> AgentState:
@@ -138,13 +180,15 @@ def executor_node(state: AgentState) -> AgentState:
     signal = state["signal"]
     price = state["analysis"]["current_price"]
 
+    shares = risk.get("target_shares", 0)
+
     # 记录交易到数据库
     db = TraderDB()
     db.log_trade(
         ticker=state["ticker"],
         action=signal["action"],
         price=price,
-        shares=10, # 暂时固定手数
+        shares=shares,
         reason=signal["reason"]
     )
 
@@ -153,7 +197,7 @@ def executor_node(state: AgentState) -> AgentState:
         "ticker": state["ticker"],
         "action": signal["action"],
         "price": price,
-        "shares": 10
+        "shares": shares
     }
     state["execution_result"] = result
     print(f"--- [交易执行官] 交易已记录: {signal['action']} @ {price:.2f} ---")
@@ -166,9 +210,13 @@ def critic_node(state: AgentState) -> AgentState:
     risk = state.get("risk_assessment")
 
     db = TraderDB()
+    memory = VectorMemory(db)
+
+    news_score = analyze_sentiment(state.get("news", []))
+    analysis = state.get("analysis", {})
 
     if exec_res:
-        reflection = f"在 {state['ticker']} 执行了 {exec_res['action']}。当时的市场情绪分数为 {analyze_sentiment(state.get('news')):.2f}。"
+        reflection = f"在 {state['ticker']} 执行了 {exec_res['action']}。当时的市场情绪分数为 {news_score:.2f}。"
         rating = 4
     elif risk and not risk["approved"]:
         reflection = f"风控拦截了 {state['ticker']} 的交易: {risk['reason']}。纪律性很好。"
@@ -177,8 +225,9 @@ def critic_node(state: AgentState) -> AgentState:
         reflection = f"{state['ticker']} 无操作。"
         rating = 3
 
-    # 保存到记忆
-    db.add_reflection(reflection, rating)
+    # 保存到向量记忆库
+    memory.add_memory(reflection, rating, analysis, news_score)
+
     state["critique"] = {"feedback": reflection, "rating": rating}
     print(f"--- [复盘分析师] 记忆已保存: {reflection} ---")
     return state

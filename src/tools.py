@@ -17,6 +17,9 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     df.ta.sma(length=20, append=True)
     df.ta.sma(length=50, append=True)
 
+    # 计算 ATR (平均真实波幅) 用于波动率风控
+    df.ta.atr(length=14, append=True)
+
     # 获取最新一行数据
     latest = df.iloc[-1]
 
@@ -28,6 +31,7 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
         "rsi_14": latest["RSI_14"],
         "sma_20": latest["SMA_20"],
         "sma_50": latest["SMA_50"],
+        "atr_14": latest["ATRr_14"], # pandas_ta ATR 列名通常是 ATRr_14 或 ATR_14，取决于版本，通常是 ATR_14 但有时带r
         "prev_sma_20": prev["SMA_20"],
         "prev_sma_50": prev["SMA_50"]
     }

@@ -6,3 +6,6 @@ yfinance
 duckdb
 duckduckgo-search
 sqlalchemy
+streamlit
+plotly
+scikit-learn

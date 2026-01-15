@@ -7,6 +7,6 @@ class AgentState(TypedDict):
     news: Optional[list] # 新闻列表
     analysis: Dict[str, Any]
     signal: Optional[Dict[str, Any]]  # 例如: {"action": "BUY", "confidence": 0.8, "reason": "..."}
-    risk_assessment: Optional[Dict[str, Any]] # 例如: {"approved": True, "reason": "..."}
+    risk_assessment: Optional[Dict[str, Any]] # 例如: {"approved": True, "target_shares": 10, "reason": "..."}
     execution_result: Optional[Dict[str, Any]] # 例如: {"status": "FILLED", "price": 100.0}
     critique: Optional[Dict[str, Any]] # 例如: {"feedback": "入场点不错..."}
