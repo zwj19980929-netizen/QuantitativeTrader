@@ -2,16 +2,18 @@ from src.database import MarketDB
 from src.data_sources.akshare_loader import AKShareLoader
 from src.data_sources.yfinance_loader import YFinanceLoader
 from src.data_sources.baostock_loader import BaostockLoader
+from src.data_sources.sina_loader import SinaDirectLoader
 import pandas as pd
 import re
 
 class MarketDataLoader:
     def __init__(self, db: MarketDB):
         self.db = db
-        # 优先级: AKShare -> Baostock (A股) -> YFinance (美股兜底)
+        # 优先级: AKShare -> Baostock (A股) -> SinaDirect (美股二备) -> YFinance (美股兜底)
         self.loaders = [
             AKShareLoader(),
             BaostockLoader(),
+            SinaDirectLoader(),
             YFinanceLoader()
         ]
 

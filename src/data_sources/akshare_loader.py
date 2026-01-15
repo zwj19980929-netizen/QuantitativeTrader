@@ -57,38 +57,44 @@ class AKShareLoader(BaseDataLoader):
 
     def _fetch_us_stock(self, ticker: str, period: str) -> pd.DataFrame:
         print(f"[AKShare] 正在获取美股数据: {ticker} ...")
-        # 东方财富美股接口
-        # 注意: akshare 的美股 symbol 可能需要特定格式，如 "105.AAPL" 或直接 "AAPL" 取决于具体函数
-        # stock_us_hist 通常可用
-
-        # 尝试 stock_us_daily (新浪) 或 stock_us_hist (东财)
-        # 东财通常更稳定: stock_us_hist(symbol='105.AAPL') -> 105 是纳斯达克, 106 纽交所?
-        # 为了通用性，先试用 stock_us_daily (新浪源，直接用 symbol)
-
         start_date = self._calculate_start_date(period)
+        end_date = datetime.now().strftime("%Y%m%d")
 
-        # 新浪接口 (有时不稳定，但 symbol 简单)
-        # df = ak.stock_us_daily(symbol=ticker.lower(), adjust="qfq")
+        # 优先尝试东方财富接口 (stock_us_hist)，数据质量更高
+        # 需要猜测市场代码: 105 (Nasdaq), 106 (NYSE), 107 (AMEX)
+        prefixes = ["105", "106", "107"]
 
-        # 换用 东方财富: stock_us_hist, 但需要知道 market id
-        # 让我们使用 ak.stock_us_spot_em() 来查找市场 ID，但这太慢。
-        # 简单起见，我们尝试 ak.stock_us_hist
-        # 实际上 AKShare 的美股接口变动频繁。
-        # 既然我们保留了 yfinance 作为备用，AKShare 这里可以尽量尝试。
+        for prefix in prefixes:
+            symbol = f"{prefix}.{ticker}"
+            try:
+                # print(f"尝试东财接口: {symbol}")
+                df = ak.stock_us_hist(symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
+                if not df.empty:
+                    df = df.rename(columns={
+                        "日期": "Date", "开盘": "Open", "收盘": "Close",
+                        "最高": "High", "最低": "Low", "成交量": "Volume"
+                    })
+                    df["Date"] = pd.to_datetime(df["Date"])
+                    df.set_index("Date", inplace=True)
+                    return df[["Open", "High", "Low", "Close", "Volume"]]
+            except:
+                continue
 
-        # 尝试使用 stock_us_spot_em 搜索 (太复杂)
-        # 让我们使用 `stock_us_daily` (基于新浪)，如果失败则依赖 fallback。
+        # 如果东财全部失败，回退到新浪 (stock_us_daily)
+        print("[AKShare] 东财接口未命中，尝试新浪接口...")
+        try:
+            df = ak.stock_us_daily(symbol=ticker.upper(), adjust="qfq") # 新浪可能需要大写? 之前试的是小写
+            df["date"] = pd.to_datetime(df["date"])
+            start_dt = pd.to_datetime(start_date)
+            df = df[df["date"] >= start_dt]
 
-        df = ak.stock_us_daily(symbol=ticker.lower(), adjust="qfq")
+            df = df.rename(columns={
+                "date": "Date", "open": "Open", "close": "Close",
+                "high": "High", "low": "Low", "volume": "Volume"
+            })
+            df.set_index("Date", inplace=True)
+            return df[["Open", "High", "Low", "Close", "Volume"]]
+        except Exception as e:
+            print(f"[AKShare] 美股获取失败: {e}")
 
-        # 过滤日期
-        df["date"] = pd.to_datetime(df["date"])
-        start_dt = pd.to_datetime(start_date)
-        df = df[df["date"] >= start_dt]
-
-        df = df.rename(columns={
-            "date": "Date", "open": "Open", "close": "Close",
-            "high": "High", "low": "Low", "volume": "Volume"
-        })
-        df.set_index("Date", inplace=True)
-        return df[["Open", "High", "Low", "Close", "Volume"]]
+        return pd.DataFrame()
