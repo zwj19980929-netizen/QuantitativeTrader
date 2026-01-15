@@ -4,6 +4,8 @@ from src.market_data import MarketDataLoader
 from src.news import fetch_market_news
 from src.semantic import NewsProcessor
 import time
+import argparse
+import sys
 
 # 初始化语义处理器
 news_processor = NewsProcessor()
@@ -80,10 +82,22 @@ def run_live_cycle(ticker: str):
     print("==================================\n")
 
 if __name__ == "__main__":
-    # 在真实部署环境中，这里会循环运行：
-    # while True:
-    #   run_live_cycle("AAPL")
-    #   time.sleep(3600)
+    parser = argparse.ArgumentParser(description="量化智能体主程序")
+    parser.add_argument("--ticker", type=str, default="AAPL", help="股票代码")
+    parser.add_argument("--loop", action="store_true", help="启用无限循环模式")
+    parser.add_argument("--interval", type=int, default=300, help="循环间隔秒数 (默认 300秒)")
 
-    # 演示用，运行一次
-    run_live_cycle("AAPL")
+    args = parser.parse_args()
+
+    if args.loop:
+        print(f"🚀 启动无限循环模式，目标: {args.ticker}，间隔: {args.interval}秒")
+        try:
+            while True:
+                run_live_cycle(args.ticker)
+                print(f"\n💤 休眠 {args.interval} 秒...")
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print("\n🛑 用户停止程序。")
+            sys.exit(0)
+    else:
+        run_live_cycle(args.ticker)
