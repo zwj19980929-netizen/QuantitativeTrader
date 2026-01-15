@@ -1,23 +1,65 @@
 from textblob import TextBlob
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import json
-import hashlib
+import os
 from typing import Dict, List, Any, Optional
+from abc import ABC, abstractmethod
 
-# --- 1. LLM 代理 (模拟大模型行为) ---
-class LLMProxy:
-    """
-    模拟大模型，将非结构化文本转化为结构化 JSON。
-    在真实生产环境中，这里会调用 OpenAI/Gemini API。
-    现在我们使用 TextBlob + 规则来模拟。
-    """
+# --- 1. LLM 接口抽象 ---
+class LLMProvider(ABC):
+    @abstractmethod
+    def analyze(self, text: str) -> Dict[str, Any]:
+        pass
+
+# --- 2. OpenAI 实现 ---
+class OpenAIProvider(LLMProvider):
+    def __init__(self, api_key: str, model="gpt-4o-mini"):
+        from openai import OpenAI
+        self.client = OpenAI(api_key=api_key)
+        self.model = model
+
+    def analyze(self, text: str) -> Dict[str, Any]:
+        prompt = f"""
+        阅读以下财经新闻并提取结构化特征。
+        必须输出为严格的 JSON 格式，不要包含 Markdown 格式标记。
+
+        新闻: "{text}"
+
+        输出 Schema:
+        {{
+            "sentiment_score": float (-1.0 到 1.0, 0 为中性),
+            "topics": list (从 ["Earnings", "Regulation", "Macro", "Product", "General"] 中选择),
+            "entity_impact": "Positive" | "Negative" | "Neutral",
+            "confidence": float (0.0 到 1.0),
+            "reasoning": string (简短理由)
+        }}
+        """
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "你是一个金融新闻分析师。只输出 JSON。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.0
+            )
+            content = response.choices[0].message.content
+            # 清理可能的 markdown 标记
+            content = content.replace("```json", "").replace("```", "").strip()
+            return json.loads(content)
+        except Exception as e:
+            print(f"[OpenAI] 错误: {e}")
+            return {"sentiment_score": 0.0, "topics": ["Error"], "confidence": 0.0, "reasoning": str(e)}
+
+# --- 3. 本地 TextBlob 回退实现 ---
+class LocalTextBlobProvider(LLMProvider):
     def analyze(self, text: str) -> Dict[str, Any]:
         blob = TextBlob(text)
-        sentiment = blob.sentiment.polarity # -1 到 1
+        sentiment = blob.sentiment.polarity
 
-        # --- 规则增强 (TextBlob 很多时候对金融词汇不敏感) ---
+        # 规则增强
         text_lower = text.lower()
         if sentiment == 0:
             if any(w in text_lower for w in ["soar", "surge", "beat", "profit", "growth", "high"]):
@@ -25,9 +67,7 @@ class LLMProxy:
             elif any(w in text_lower for w in ["crash", "plunge", "miss", "loss", "low", "drop"]):
                 sentiment = -0.6
 
-        subjectivity = blob.sentiment.subjectivity # 0 到 1 (可作为 confidence 的参考)
-
-        # 模拟主题分类
+        # 简单主题分类
         topics = []
         if any(w in text_lower for w in ["earnings", "revenue", "profit", "quarter", "财报", "营收"]):
             topics.append("Earnings")
@@ -41,50 +81,25 @@ class LLMProxy:
         if not topics:
             topics.append("General")
 
-        # 构造结构化输出
-        result = {
+        return {
             "sentiment_score": round(sentiment, 2),
-            "confidence": round(0.5 + (abs(sentiment) * 0.5), 2), # 情绪越强烈，置信度越高
             "topics": topics,
-            "entity_impact": "Positive" if sentiment > 0.1 else ("Negative" if sentiment < -0.1 else "Neutral"),
-            "summary": text[:50] + "..." if len(text) > 50 else text
+            "entity_impact": "Positive" if sentiment > 0 else ("Negative" if sentiment < 0 else "Neutral"),
+            "confidence": round(0.5 + abs(sentiment) * 0.4, 2),
+            "reasoning": "Local NLP analysis"
         }
-        return result
 
-# --- 2. 语义缓存 (向量数据库模拟) ---
+# --- 4. 语义缓存 ---
 class SemanticCache:
-    """
-    缓存已分析的新闻，避免重复调用 LLM。
-    使用 TF-IDF 计算相似度。
-    """
     def __init__(self):
-        self.cache = [] # List of {"vector": np.array, "text": str, "result": dict}
+        self.cache = []
         self.vectorizer = TfidfVectorizer()
         self._is_dirty = True
 
-    def _rebuild_index(self):
-        """重新计算所有缓存项的 TF-IDF 向量 (简化版，生产环境应使用 FAISS)"""
-        if not self.cache:
-            return
-        corpus = [item["text"] for item in self.cache]
-        self.tfidf_matrix = self.vectorizer.fit_transform(corpus)
-        self._is_dirty = False
-
     def lookup(self, text: str, threshold=0.85) -> Optional[Dict]:
-        """查找相似文本的分析结果"""
-        if not self.cache:
-            return None
+        if not self.cache: return None
 
-        if self._is_dirty:
-            self._rebuild_index()
-
-        # 计算查询文本的向量
-        # 注意: 这里有个小问题，fit_transform 会改变维度。
-        # 真正的缓存应该使用预训练的 Embeddings (如 BERT/OpenAI)。
-        # 为了这里的演示，我们只做完全匹配 (Hash) 或简单的 Jaccard 相似度，
-        # 因为动态更新 TF-IDF 在增量场景下很麻烦。
-
-        # 回退到 Jaccard 相似度作为简单语义近似
+        # 简单的 Jaccard 相似度 (为了不引入更复杂的向量库)
         tokens_a = set(text.lower().split())
         best_score = 0
         best_result = None
@@ -100,25 +115,27 @@ class SemanticCache:
                 best_result = item["result"]
 
         if best_score > threshold:
-            print(f"[缓存] 命中! 相似度: {best_score:.2f}")
+            print(f"[语义缓存] 命中! (相似度: {best_score:.2f})")
             return best_result
-
         return None
 
     def store(self, text: str, result: Dict):
         self.cache.append({"text": text, "result": result})
-        # self._is_dirty = True # 如果使用 TF-IDF
 
-# --- 3. 新闻处理器 (漏斗控制器) ---
+# --- 5. 新闻处理器 (工厂模式) ---
 class NewsProcessor:
     def __init__(self):
-        self.llm = LLMProxy()
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key:
+            print("[系统] 检测到 OpenAI API Key，启用 GPT-4o-mini 引擎。")
+            self.llm = OpenAIProvider(api_key)
+        else:
+            print("[系统] 未检测到 API Key，使用本地 TextBlob 引擎 (降级模式)。")
+            self.llm = LocalTextBlobProvider()
+
         self.cache = SemanticCache()
 
     def process_batch(self, news_list: List[Dict]) -> Dict[str, Any]:
-        """
-        处理一批新闻，返回聚合的结构化特征。
-        """
         if not news_list:
             return {"sentiment_score": 0.0, "topics": [], "confidence": 0.0}
 
@@ -138,10 +155,9 @@ class NewsProcessor:
                 analysis = self.llm.analyze(text)
                 self.cache.store(text, analysis)
 
-            # 3. 聚合
-            total_sentiment += analysis["sentiment_score"]
-            total_confidence += analysis["confidence"]
-            all_topics.update(analysis["topics"])
+            total_sentiment += analysis.get("sentiment_score", 0)
+            total_confidence += analysis.get("confidence", 0)
+            all_topics.update(analysis.get("topics", []))
             count += 1
 
         if count == 0:
