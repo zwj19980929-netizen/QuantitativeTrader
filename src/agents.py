@@ -1,157 +1,184 @@
 from src.state import AgentState
 from src.tools import calculate_technical_indicators
+from src.database import TraderDB
 import random
 
+def analyze_sentiment(news_list):
+    """
+    Simple keyword-based sentiment analysis on news headlines.
+    Returns a score from -1.0 (Negative) to 1.0 (Positive).
+    """
+    if not news_list:
+        return 0.0
+
+    score = 0
+    total = 0
+
+    # Mock sentiment dictionary
+    positive_words = ["soar", "surge", "jump", "record", "growth", "buy", "outperform", "beat", "higher"]
+    negative_words = ["plunge", "crash", "drop", "miss", "loss", "sell", "down", "lower", "lawsuit", "investigation"]
+
+    for item in news_list:
+        text = (item.get("title", "") + " " + item.get("snippet", "")).lower()
+        if not text.strip():
+            continue
+
+        total += 1
+        found_pos = sum(1 for w in positive_words if w in text)
+        found_neg = sum(1 for w in negative_words if w in text)
+
+        if found_pos > found_neg:
+            score += 1
+        elif found_neg > found_pos:
+            score -= 1
+
+    if total == 0:
+        return 0.0
+
+    return score / total # Normalize to -1 to 1
+
 def strategist_node(state: AgentState) -> AgentState:
-    """
-    Strategist Agent: Analyzes market data and generates trading signals.
-    """
     print(f"--- [Strategist] Analyzing {state['ticker']} ---")
 
-    # 1. Use Tool: Calculate Indicators
+    # 1. Technical Analysis
     analysis = calculate_technical_indicators(state["data"])
     state["analysis"] = analysis
 
     if not analysis:
-        print("--- [Strategist] Not enough data to analyze. ---")
+        print("--- [Strategist] Not enough data. ---")
         return state
 
-    # 2. Logic (Mocking LLM Reasoning)
     rsi = analysis["rsi_14"]
-    sma20 = analysis["sma_20"]
-    sma50 = analysis["sma_50"]
     price = analysis["current_price"]
 
-    print(f"--- [Strategist] Indicators: RSI={rsi:.2f}, SMA20={sma20:.2f}, Price={price:.2f} ---")
+    # 2. News Sentiment Analysis
+    news_score = analyze_sentiment(state.get("news", []))
+    print(f"--- [Strategist] Tech: RSI={rsi:.2f} | News Sentiment: {news_score:.2f} ---")
 
-    signal = {"action": "HOLD", "confidence": 0.0, "reason": "Market is neutral"}
+    # 3. Hybrid Decision Logic
+    signal = {"action": "HOLD", "confidence": 0.0, "reason": "Neutral"}
 
-    # Simple Mean Reversion / Trend Following Logic
-    if rsi < 40: # Low threshold for demo
+    # Condition: BUY
+    # Technical: RSI < 40 (Oversold) OR Golden Cross (implied by price action usually, simplified here)
+    # Fundamental: Sentiment > -0.2 (Not terrible)
+    if rsi < 40 and news_score > -0.5:
         signal = {
             "action": "BUY",
             "confidence": 0.8,
-            "reason": f"Oversold (RSI {rsi:.2f} < 40)"
+            "reason": f"Oversold (RSI {rsi:.2f}) & Sentiment OK ({news_score:.2f})"
         }
+    # Condition: SELL
+    # Technical: RSI > 70
+    # OR Sentiment is very bad (< -0.5)
     elif rsi > 70:
         signal = {
             "action": "SELL",
             "confidence": 0.8,
-            "reason": f"Overbought (RSI {rsi:.2f} > 70)"
+            "reason": f"Overbought (RSI {rsi:.2f})"
         }
-    elif sma20 > sma50 and price > sma20:
-        # Golden Cross-ish
+    elif news_score < -0.5:
+        signal = {
+            "action": "SELL",
+            "confidence": 0.9,
+            "reason": f"Negative News Sentiment ({news_score:.2f})"
+        }
+    elif news_score > 0.5:
         signal = {
             "action": "BUY",
             "confidence": 0.6,
-            "reason": "Uptrend (Price > SMA20 > SMA50)"
+            "reason": f"Positive News Momentum ({news_score:.2f})"
         }
 
     state["signal"] = signal
-    print(f"--- [Strategist] Signal Generated: {signal['action']} ({signal['reason']}) ---")
+    print(f"--- [Strategist] Signal: {signal['action']} ({signal['reason']}) ---")
     return state
 
-
 def risk_manager_node(state: AgentState) -> AgentState:
-    """
-    Risk Manager Agent: Validates signals against risk constraints.
-    """
     print("--- [Risk Manager] Reviewing Signal ---")
     signal = state.get("signal")
 
     if not signal or signal["action"] == "HOLD":
-        state["risk_assessment"] = {"approved": False, "reason": "No actionable signal"}
+        state["risk_assessment"] = {"approved": False, "reason": "No signal"}
         return state
 
-    # Logic (Mocking Risk Model)
-    # Rule 1: Don't buy if RSI is extremely high (even if Strategist says Buy for some reason - simplified conflict)
-    # Rule 2: Random "Macro Event" simulated veto
+    # Check Long-term Memory for past lessons
+    # (In a real system, we'd embed the current state and query vector DB.
+    # Here we just check latest reflections for keywords)
+
+    db = TraderDB() # Connect to DB
+    recent_reflections = db.get_latest_reflections(limit=3)
+
+    caution_flag = False
+    for ref in recent_reflections:
+        if "risk" in ref["content"].lower() and ref["rating"] < 3:
+            print(f"--- [Risk Manager] Recall: {ref['content']} ---")
+            caution_flag = True
 
     analysis = state["analysis"]
     rsi = analysis.get("rsi_14", 50)
 
-    # Hard Rule: Veto BUY if RSI > 80 (Extreme risk)
-    if signal["action"] == "BUY" and rsi > 80:
-        assessment = {
-            "approved": False,
-            "reason": f"REJECTED: RSI {rsi:.2f} is dangerously high."
-        }
-    else:
-        # Simulate a 10% chance of Risk Rejection due to "Portfolio Exposure" or "Macro News"
-        if random.random() < 0.1:
-            assessment = {
-                "approved": False,
-                "reason": "REJECTED: Portfolio exposure limit reached."
-            }
-        else:
-            assessment = {
-                "approved": True,
-                "reason": "Risk checks passed."
-            }
+    assessment = {"approved": True, "reason": "Checks passed"}
+
+    if signal["action"] == "BUY":
+        if rsi > 75:
+             assessment = {"approved": False, "reason": "RSI too high for BUY"}
+        elif caution_flag and random.random() < 0.5:
+             assessment = {"approved": False, "reason": "Cautious due to past poor performance."}
 
     state["risk_assessment"] = assessment
-    print(f"--- [Risk Manager] Decision: {'APPROVED' if assessment['approved'] else 'REJECTED'} ({assessment['reason']}) ---")
+    print(f"--- [Risk Manager] {assessment['approved']} ({assessment['reason']}) ---")
     return state
 
-
 def executor_node(state: AgentState) -> AgentState:
-    """
-    Executor Agent: Executes the trade if approved.
-    """
-    print("--- [Executor] Processing Trade ---")
-
+    print("--- [Executor] Executing ---")
     risk = state.get("risk_assessment")
     if not risk or not risk["approved"]:
-        print("--- [Executor] No approved trade to execute. ---")
         return state
 
     signal = state["signal"]
     price = state["analysis"]["current_price"]
 
-    # Simulate Execution (Slippage)
-    slippage = price * 0.001 # 0.1% slippage
-    exec_price = price + slippage if signal["action"] == "BUY" else price - slippage
+    # Log trade to DB
+    db = TraderDB()
+    db.log_trade(
+        ticker=state["ticker"],
+        action=signal["action"],
+        price=price,
+        shares=10, # Fixed size for now
+        reason=signal["reason"]
+    )
 
     result = {
         "status": "FILLED",
         "ticker": state["ticker"],
         "action": signal["action"],
-        "price": exec_price,
-        "shares": 100, # Mock quantity
-        "commission": 1.0
+        "price": price,
+        "shares": 10
     }
-
     state["execution_result"] = result
-    print(f"--- [Executor] Trade Executed: {signal['action']} @ {exec_price:.2f} ---")
+    print(f"--- [Executor] Trade Logged: {signal['action']} @ {price:.2f} ---")
     return state
 
 def critic_node(state: AgentState) -> AgentState:
-    """
-    Critic Agent: Reviews the cycle and stores learnings (mocked).
-    """
-    print("--- [Critic] Analyzing Outcome ---")
+    print("--- [Critic] Reflecting ---")
 
     exec_res = state.get("execution_result")
+    risk = state.get("risk_assessment")
 
-    critique = {}
+    db = TraderDB()
+
     if exec_res:
-         critique = {
-             "feedback": f"Trade executed at {exec_res['price']:.2f}. Monitoring for profit.",
-             "rating": 5
-         }
+        reflection = f"Executed {exec_res['action']} on {state['ticker']}. Market Sentiment was {analyze_sentiment(state.get('news')):.2f}."
+        rating = 4
+    elif risk and not risk["approved"]:
+        reflection = f"Risk blocked trade on {state['ticker']}: {risk['reason']}. Good discipline."
+        rating = 5
     else:
-        risk = state.get("risk_assessment")
-        if risk and not risk["approved"]:
-            critique = {
-                "feedback": f"Good risk control: {risk['reason']}",
-                "rating": 4
-            }
-        else:
-            critique = {
-                "feedback": "No trade generated, standard monitoring.",
-                "rating": 3
-            }
+        reflection = f"No action on {state['ticker']}."
+        rating = 3
 
-    state["critique"] = critique
-    print(f"--- [Critic] Feedback: {critique['feedback']} ---")
+    # Save to Memory
+    db.add_reflection(reflection, rating)
+    state["critique"] = {"feedback": reflection, "rating": rating}
+    print(f"--- [Critic] Memory Saved: {reflection} ---")
     return state
