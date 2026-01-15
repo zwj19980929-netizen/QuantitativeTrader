@@ -1,0 +1,4 @@
+langgraph
+pandas
+pandas_ta
+numpy
