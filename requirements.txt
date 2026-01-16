@@ -14,3 +14,4 @@ openai
 akshare
 baostock
 matplotlib
+tqdm

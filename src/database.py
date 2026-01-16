@@ -80,6 +80,22 @@ class MarketDB:
             df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
         return df
 
+    def get_existing_tickers(self):
+        """获取数据库中已有的所有股票代码"""
+        try:
+            return [row[0] for row in self.conn.execute("SELECT DISTINCT ticker FROM ohlcv").fetchall()]
+        except:
+            return []
+
+    def get_stats(self):
+        """打印数据库统计信息"""
+        try:
+            count = self.conn.execute("SELECT COUNT(*) FROM ohlcv").fetchone()[0]
+            tickers = self.conn.execute("SELECT COUNT(DISTINCT ticker) FROM ohlcv").fetchone()[0]
+            print(f"[MarketDB 统计] 覆盖股票: {tickers} 只, 总数据行数: {count}")
+        except Exception as e:
+            print(f"[MarketDB] 统计失败: {e}")
+
 # --- 交易数据 (SQLite via SQLAlchemy) ---
 Base = declarative_base()
 
