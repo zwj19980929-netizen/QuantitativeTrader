@@ -8,7 +8,7 @@ import os
 class MarketDB:
     def __init__(self):
         # 从环境变量读取连接串
-        # 格式: postgresql+psycopg2://zwj932609284:Zwj199864_@pgm-bp1jd4ngih384l49eo.pg.rds.aliyuncs.com:5432/postgres
+        # 格式: postgresql+psycopg2://user:password@host:port/dbname
         self.db_url = os.getenv("DB_URL")
         if not self.db_url:
             print("[MarketDB] 警告: 未检测到环境变量 DB_URL。")
@@ -42,6 +42,22 @@ class MarketDB:
                     )
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_date ON ohlcv (date)"))
+
+                # 分钟线表 (SQLite)
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ohlcv_minute (
+                        ticker VARCHAR(20),
+                        date TIMESTAMP,
+                        open DOUBLE PRECISION,
+                        high DOUBLE PRECISION,
+                        low DOUBLE PRECISION,
+                        close DOUBLE PRECISION,
+                        volume DOUBLE PRECISION,
+                        PRIMARY KEY (ticker, date)
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_minute_date ON ohlcv_minute (date)"))
+
             else:
                 # PostgreSQL 语法 (分开执行)
                 conn.execute(text("""
@@ -57,6 +73,22 @@ class MarketDB:
                     )
                 """))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_date ON ohlcv (date)"))
+
+                # 分钟线表 (PG)
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ohlcv_minute (
+                        ticker VARCHAR(20),
+                        date TIMESTAMP,
+                        open DOUBLE PRECISION,
+                        high DOUBLE PRECISION,
+                        low DOUBLE PRECISION,
+                        close DOUBLE PRECISION,
+                        volume DOUBLE PRECISION,
+                        PRIMARY KEY (ticker, date)
+                    )
+                """))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_minute_date ON ohlcv_minute (date)"))
+
             conn.commit()
 
     def save_data(self, ticker: str, df: pd.DataFrame):
@@ -99,6 +131,40 @@ class MarketDB:
 
         print(f"[MarketDB] 已存储 {len(df_to_save)} 行 {ticker} 数据。")
 
+    def save_minute_data(self, ticker: str, df: pd.DataFrame):
+        """保存分钟级数据到 ohlcv_minute"""
+        if df.empty:
+            return
+
+        df_copy = df.copy()
+        if "Date" not in df_copy.columns:
+            df_copy.reset_index(inplace=True)
+
+        df_copy["ticker"] = ticker
+
+        # 标准化列名
+        rename_map = {
+            "Date": "date", "Open": "open", "High": "high",
+            "Low": "low", "Close": "close", "Volume": "volume"
+        }
+        df_copy = df_copy.rename(columns=rename_map)
+
+        df_to_save = df_copy[["ticker", "date", "open", "high", "low", "close", "volume"]]
+        df_to_save["date"] = pd.to_datetime(df_to_save["date"])
+
+        min_date = df_to_save["date"].min().to_pydatetime()
+        max_date = df_to_save["date"].max().to_pydatetime()
+
+        # 事务处理: 先删除该时间段内的数据
+        with self.engine.begin() as conn:
+            conn.execute(text(
+                "DELETE FROM ohlcv_minute WHERE ticker = :ticker AND date >= :min_date AND date <= :max_date"
+            ), {"ticker": ticker, "min_date": min_date, "max_date": max_date})
+
+            df_to_save.to_sql('ohlcv_minute', conn, if_exists='append', index=False, method='multi', chunksize=500)
+
+        print(f"[MarketDB] 已存储 {len(df_to_save)} 行 {ticker} 分钟数据。")
+
     def load_data(self, ticker: str, limit: int = 100) -> pd.DataFrame:
         """从数据库调取历史数据"""
         query = text(f"SELECT * FROM ohlcv WHERE ticker = :ticker ORDER BY date DESC LIMIT :limit")
@@ -111,6 +177,20 @@ class MarketDB:
             df.set_index("date", inplace=True)
             df.sort_index(inplace=True)
             # 兼容回测工具类 (恢复大写)
+            df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
+        return df
+
+    def load_minute_data(self, ticker: str, limit: int = 1000) -> pd.DataFrame:
+        """从数据库调取历史分钟数据"""
+        query = text(f"SELECT * FROM ohlcv_minute WHERE ticker = :ticker ORDER BY date DESC LIMIT :limit")
+
+        with self.engine.connect() as conn:
+            df = pd.read_sql(query, conn, params={"ticker": ticker, "limit": limit})
+
+        if not df.empty:
+            df["date"] = pd.to_datetime(df["date"])
+            df.set_index("date", inplace=True)
+            df.sort_index(inplace=True)
             df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
         return df
 
