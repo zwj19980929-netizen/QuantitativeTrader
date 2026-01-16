@@ -10,19 +10,27 @@ import sys
 # 初始化语义处理器
 news_processor = NewsProcessor()
 
-def run_live_cycle(ticker: str):
-    print(f"\n========== 实盘交易循环: {ticker} ==========")
+# 全局变量记录上一次状态，用于减少刷屏
+last_state = {}
+
+def run_live_cycle(ticker: str, silent_if_unchanged=False):
+    global last_state
 
     # 1. 初始化基础设施
-    print("[系统] 正在连接数据金库 (The Vault)...")
-    market_db = MarketDB() # duckdb
-    # trader_db = TraderDB() # sqlite (在 agents 内部实例化，或者如果想查询可以在这里实例化)
+    market_db = MarketDB()
     data_loader = MarketDataLoader(market_db)
 
     # 2. 获取情报 (市场数据)
-    print(f"[系统] 正在获取 {ticker} 的市场数据...")
-    # 获取足够的数据用于技术分析 (例如 6 个月)
-    data_loader.fetch_and_store(ticker, period="6mo")
+    # data_loader.fetch_and_store(ticker, period="6mo")
+    # 注意: 为了性能，fetch_and_store 内部最好有检查逻辑，或者我们在这里信任 MarketDataLoader 的增量更新能力
+    # 目前 MarketDataLoader 每次都会去 fetch。
+
+    try:
+        data_loader.fetch_and_store(ticker, period="6mo")
+    except Exception as e:
+        print(f"[错误] 数据获取失败: {e}")
+        return
+
     df = market_db.load_data(ticker)
 
     if df.empty:
@@ -30,18 +38,27 @@ def run_live_cycle(ticker: str):
         return
 
     latest_price = df.iloc[-1]['Close']
-    print(f"[市场] {ticker} 价格: ${latest_price:.2f}")
+    latest_date = df.index[-1]
 
-    # 3. 获取情报 (新闻)
+    # 3. 检查是否需要完整运行 (静默模式)
+    state_key = f"{ticker}_{latest_date}_{latest_price}"
+    if silent_if_unchanged and last_state.get(ticker) == state_key:
+        sys.stdout.write(f"\r[监控中] {ticker} | 价格: {latest_price:.2f} | 日期: {latest_date.date()} | 无变化...")
+        sys.stdout.flush()
+        return
+
+    print(f"\n\n========== 实盘交易循环: {ticker} ==========")
+    print(f"[市场] {ticker} 价格: ${latest_price:.2f} (日期: {latest_date.date()})")
+
+    # 4. 获取情报 (新闻)
     print(f"[系统] 正在扫描 {ticker} 的新闻线...")
     news = fetch_market_news(f"{ticker} stock news")
-    print(f"[新闻] 找到 {len(news)} 篇近期文章。")
 
     # 语义预览
     features = news_processor.process_batch(news)
     print(f"[语义层] 情绪: {features['sentiment_score']:.2f} | 置信度: {features['confidence']:.2f} | 主题: {features['topics']}")
 
-    # 4. 初始化状态
+    # 5. 初始化状态
     initial_state = {
         "ticker": ticker,
         "data": df,
@@ -53,17 +70,15 @@ def run_live_cycle(ticker: str):
         "critique": None
     }
 
-    # 5. 启动智能体系统
-    print("[系统] 正在唤醒智能体...")
+    # 6. 启动智能体系统
     app = build_graph()
     final_state = app.invoke(initial_state)
 
-    # 6. 报告
+    # 7. 报告
     print("\n========== 循环报告 ==========")
     signal = final_state.get("signal")
     risk = final_state.get("risk_assessment")
     exec_res = final_state.get("execution_result")
-    critique = final_state.get("critique")
 
     if signal:
         print(f"策略研究员: {signal['action']} | {signal['reason']}")
@@ -76,10 +91,10 @@ def run_live_cycle(ticker: str):
     else:
         print(f"交易执行官: 无交易。")
 
-    if critique:
-        print(f"复盘分析师: {critique['feedback']}")
-
     print("==================================\n")
+
+    # 更新状态缓存
+    last_state[ticker] = state_key
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="量化智能体主程序")
@@ -93,9 +108,14 @@ if __name__ == "__main__":
         print(f"🚀 启动无限循环模式，目标: {args.ticker}，间隔: {args.interval}秒")
         try:
             while True:
-                run_live_cycle(args.ticker)
-                print(f"\n💤 休眠 {args.interval} 秒...")
-                time.sleep(args.interval)
+                # 在循环模式下，如果状态未变，保持静默
+                run_live_cycle(args.ticker, silent_if_unchanged=True)
+
+                # 倒计时显示
+                for i in range(args.interval, 0, -1):
+                    # 如果不是静默输出（即刚跑完一次完整循环），才显示倒计时
+                    # 这里简化处理：总是 sleep
+                    time.sleep(1)
         except KeyboardInterrupt:
             print("\n🛑 用户停止程序。")
             sys.exit(0)

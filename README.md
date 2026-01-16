@@ -91,7 +91,39 @@ python -m src.main --ticker AAPL
 python -m src.main --ticker AAPL --loop --interval 300
 ```
 
-### 3. 额外工具：东方财富爬虫 (学习用)
+### 3. 实战指南：A股存数据与分析
+
+#### 第一步：把 A 股数据存到数据库 (装填弹药)
+使用批量下载器，一次性下载数百只股票的历史日线数据。
+
+**命令：下载沪深300成分股 (推荐)**
+```bash
+python -m src.data_sources.batch_loader --scope hs300 --period 3y
+```
+
+**命令：下载指定股票 (如茅台、平安)**
+```bash
+python -m src.data_sources.batch_loader --scope 600519,000001 --period 3y
+```
+
+#### 第二步：实时监控与自动决策 (开火)
+启动智能体进行不间断监控。它会自动获取最新数据（支持增量更新），分析买卖点。
+
+**命令：每 3 秒监控一次茅台**
+```bash
+python -m src.main --ticker 600519 --loop --interval 3
+```
+*注：由于 A 股日线每日收盘才更新，高频轮询主要用于捕捉盘后更新或盘中分钟线(需代码升级)。*
+
+#### 第三步：回测分析 (复盘)
+验证策略在历史上的表现，回答“什么时候买卖最赚钱”。
+
+**命令：回测茅台**
+```bash
+python -m src.backtest --ticker 600519
+```
+
+### 4. 额外工具：东方财富爬虫 (学习用)
 如果你想抓取特定的量化数据（如板块资金流向、个股研报），可以运行独立的爬虫工具：
 ```bash
 python src/crawl_eastmoney.py
