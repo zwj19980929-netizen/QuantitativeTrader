@@ -8,7 +8,7 @@ import os
 class MarketDB:
     def __init__(self):
         # 从环境变量读取连接串
-        # 格式: postgresql+psycopg2://user:password@host:port/dbname
+        # 格式: postgresql+psycopg2://zwj932609284:Zwj199864_@pgm-bp1jd4ngih384l49eo.pg.rds.aliyuncs.com:5432/postgres
         self.db_url = os.getenv("DB_URL")
         if not self.db_url:
             print("[MarketDB] 警告: 未检测到环境变量 DB_URL。")
