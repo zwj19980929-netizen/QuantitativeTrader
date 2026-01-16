@@ -7,8 +7,8 @@ import argparse
 from tqdm import tqdm
 
 class AShareBatchLoader:
-    def __init__(self, db_path="market_data.ddb"):
-        self.db = MarketDB(db_path)
+    def __init__(self):
+        self.db = MarketDB()
         self.loader = MarketDataLoader(self.db)
 
     def get_stock_list(self, scope="hs300"):
