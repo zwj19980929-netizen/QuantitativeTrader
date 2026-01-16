@@ -126,7 +126,7 @@ python -m src.backtest --ticker 600519
 ### 4. 额外工具：东方财富爬虫 (学习用)
 如果你想抓取特定的量化数据（如板块资金流向、个股研报），可以运行独立的爬虫工具：
 ```bash
-python src/crawl_eastmoney.py
+python -m src.eastmoney_a_crawler.eastmoney_a.client
 ```
 *注：此脚本仅作学习演示，不参与主程序的自动交易逻辑。*
 
