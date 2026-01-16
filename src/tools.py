@@ -15,6 +15,9 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     # 确保列名正确 (ta 库通常需要 Close, High, Low)
     # 我们的 df 应该已经有这些列 (首字母大写)
 
+    # 创建副本以避免 SettingWithCopyWarning
+    df = df.copy()
+
     close = df["Close"]
     high = df["High"]
     low = df["Low"]

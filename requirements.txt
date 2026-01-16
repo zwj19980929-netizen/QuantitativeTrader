@@ -13,3 +13,4 @@ textblob
 openai
 akshare
 baostock
+matplotlib
