@@ -132,8 +132,21 @@ def risk_manager_node(state: AgentState) -> AgentState:
              reason += " (基于历史教训，仓位减半)"
 
     # --- 3. 动态仓位管理 (Volatility Sizing) ---
-    # 假设账户资金 $100,000
-    account_equity = 100000.0
+    # 从 Broker 获取真实账户净值
+    account_equity = 100000.0 # Default fallback
+    broker = state.get("broker")
+    if broker:
+        # Equity = Total Cash (Balance) + Market Value of Positions
+        # But broker.get_total_value() calculates total equity
+        # Ideally we use get_total_value but need to handle pricing context
+        # For simplicity, assuming Broker is up to date or we use Balance
+        # User said: "Current cash ... total equity"
+        try:
+            account_equity = broker.get_total_value()
+        except:
+            acct = broker.get_account_state()
+            if acct: account_equity = float(acct["total_cash"])
+
     risk_per_trade_pct = 0.01 # 单笔亏损不超过 1%
     risk_budget = account_equity * risk_per_trade_pct # $1000
 
@@ -142,10 +155,31 @@ def risk_manager_node(state: AgentState) -> AgentState:
 
     # 凯利公式/波动率平价计算股数
     # Shares = Risk Budget / Risk Per Share
+    target_shares = 0
     if stop_loss_dist > 0:
         target_shares = int(risk_budget / stop_loss_dist)
-    else:
-        target_shares = 0
+
+    # 限制单票最大持仓 (例如 20%)
+    # If Broker available, check existing
+    if broker and approved and signal["action"] == "BUY":
+        current_pos_val = 0
+        positions = broker.get_positions()
+        for p in positions:
+            if p["ticker"] == state["ticker"]:
+                current_pos_val = float(p["quantity"]) * price
+                break
+
+        # Max pos value = 20% equity
+        max_pos_val = account_equity * 0.2
+        avail_space_val = max_pos_val - current_pos_val
+        if avail_space_val <= 0:
+            approved = False
+            reason = "超过单票持仓上限 (20%)"
+            target_shares = 0
+        else:
+            # Cap target shares to available space
+            max_shares = int(avail_space_val / price)
+            target_shares = min(target_shares, max_shares)
 
     # 如果有历史教训，仓位减半
     if caution_flag:
@@ -172,18 +206,36 @@ def executor_node(state: AgentState) -> AgentState:
 
     signal = state["signal"]
     price = state["analysis"]["current_price"]
-
     shares = risk.get("target_shares", 0)
+    broker = state.get("broker")
 
-    # 记录交易到数据库
-    db = TraderDB()
-    db.log_trade(
-        ticker=state["ticker"],
-        action=signal["action"],
-        price=price,
-        shares=shares,
-        reason=signal["reason"]
-    )
+    if broker:
+        # 使用 Broker 执行
+        if signal["action"] == "BUY":
+            broker.submit_order(state["ticker"], "BUY", shares, price=price)
+        elif signal["action"] == "SELL":
+            # 卖出逻辑：卖出多少？Risk Manager 应该决定卖出数量
+            # 目前 Risk Manager 只计算 Target Shares (Buying)
+            # 如果是 SELL，通常全卖或卖一半。
+            # 为了简单，如果是 SELL 信号，我们卖出所有可用持仓
+            positions = broker.get_positions()
+            for p in positions:
+                if p["ticker"] == state["ticker"]:
+                    qty = float(p["available_quantity"])
+                    if qty > 0:
+                        broker.submit_order(state["ticker"], "SELL", qty, price=price)
+                        shares = qty # Update shares for logging
+
+    else:
+        # Fallback to DB logging only (Legacy)
+        db = TraderDB()
+        db.log_trade(
+            ticker=state["ticker"],
+            action=signal["action"],
+            price=price,
+            shares=shares,
+            reason=signal["reason"]
+        )
 
     result = {
         "status": "FILLED",
@@ -193,7 +245,7 @@ def executor_node(state: AgentState) -> AgentState:
         "shares": shares
     }
     state["execution_result"] = result
-    print(f"--- [交易执行官] 交易已记录: {signal['action']} @ {price:.2f} ---")
+    print(f"--- [交易执行官] 交易已记录: {signal['action']} {shares} @ {price:.2f} ---")
     return state
 
 def critic_node(state: AgentState) -> AgentState:

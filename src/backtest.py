@@ -1,132 +1,142 @@
 import pandas as pd
 import argparse
+import matplotlib.pyplot as plt
 from src.database import MarketDB
 from src.market_data import MarketDataLoader
-from src.agents import strategist_node
-from src.tools import calculate_technical_indicators
-import matplotlib.pyplot as plt
+from src.agents import strategist_node, risk_manager_node, executor_node
+from src.broker import SimulatedBroker
 
 class Backtester:
-    def __init__(self, ticker: str, initial_capital=100000.0):
+    def __init__(self, ticker: str, initial_capital=1000000.0, start_date="20200101"):
         self.ticker = ticker
         self.initial_capital = initial_capital
-        self.capital = initial_capital
-        self.shares = 0
         self.history = []
 
-        # 加载数据
+        # Load Data
         db = MarketDB()
-        loader = MarketDataLoader(db)
-        # 确保有足够的数据 (例如 3 年)
-        loader.fetch_and_store(ticker, period="3y")
-        self.df = db.load_data(ticker)
+        self.loader = MarketDataLoader(db)
+
+        # Attempt to load from DB first to save time
+        # If empty or too few, try fetch
+        self.df = db.load_data(ticker, limit=5000)
+        if len(self.df) < 100:
+            print(f"[Backtest] Insufficient data in DB ({len(self.df)} rows), fetching...")
+            self.loader.fetch_and_store(ticker, period="10y")
+            self.df = db.load_data(ticker, limit=5000)
 
         if self.df.empty:
-            raise ValueError(f"没有找到 {ticker} 的数据，无法回测。")
+            raise ValueError(f"No data for {ticker}")
 
-        print(f"[回测] 数据加载完成: {len(self.df)} 行")
+        # Filter by start date
+        self.df = self.df[self.df.index >= pd.to_datetime(start_date)]
+        print(f"[Backtest] Loaded {len(self.df)} rows starting {start_date}")
+
+        # Initialize Broker
+        # Reset account for clean backtest
+        account_id = f"backtest_{ticker}"
+        # Reset state in DB
+        db.update_account_state(account_id, total=initial_capital, available=initial_capital, frozen=0.0)
+        # Clear positions
+        from sqlalchemy import text
+        with db.engine.begin() as conn:
+            conn.execute(text("DELETE FROM positions WHERE account_id=:aid"), {"aid": account_id})
+
+        self.broker = SimulatedBroker(account_id, initial_cash=initial_capital, db=db)
 
     def run(self):
-        print(f"[回测] 开始回测 {self.ticker} ...")
+        print(f"[Backtest] Running...")
 
-        # 从第 50 天开始 (为了计算技术指标)
-        start_idx = 50
+        # Warmup for indicators
+        window = 50
 
-        for i in range(start_idx, len(self.df)):
-            # 切片数据，模拟截止到当天的情况
+        for i in range(window, len(self.df)):
             current_date = self.df.index[i]
             data_slice = self.df.iloc[:i+1]
 
-            current_price = data_slice.iloc[-1]["Close"]
-
-            # 构建状态
+            # State for Agents
             state = {
                 "ticker": self.ticker,
                 "data": data_slice,
-                "news": [], # 回测暂不包含历史新闻
+                "news": [], # Placeholder
                 "analysis": {},
-                "signal": None
+                "signal": None,
+                "broker": self.broker # Pass broker to agents if they support it
             }
 
-            # 调用策略师
-            # 注意: 这里我们只调用 Strategist，跳过 RiskManager 和 Executor 以简化回测速度
-            # 在真实回测中，应该包含完整链路
-            result_state = strategist_node(state)
-            signal = result_state.get("signal")
+            # 1. Strategist
+            state = strategist_node(state)
 
-            action = "HOLD"
-            if signal:
-                action = signal["action"]
+            # 2. Risk Manager
+            state = risk_manager_node(state)
 
-            # 执行逻辑 (简化版)
-            if action == "BUY" and self.capital >= current_price:
-                # 全仓买入 (为了测试信号效果)
-                # 实际应该按 RiskManager 仓位管理
-                buy_shares = int(self.capital / current_price)
-                if buy_shares > 0:
-                    cost = buy_shares * current_price
-                    self.capital -= cost
-                    self.shares += buy_shares
-                    print(f"[{current_date.date()}] 买入 {buy_shares} 股 @ {current_price:.2f}")
+            # 3. Execution
+            state = executor_node(state)
 
-            elif action == "SELL" and self.shares > 0:
-                # 全仓卖出
-                revenue = self.shares * current_price
-                self.capital += revenue
-                print(f"[{current_date.date()}] 卖出 {self.shares} 股 @ {current_price:.2f} -> 资金: {self.capital:.2f}")
-                self.shares = 0
+            # Record stats
+            # Broker needs to be aware of current price to calc Total Value correctly
+            # We can cheat by updating "current_price" in DB positions manually, or
+            # ensure broker.get_total_value() uses `get_market_price` which uses DB.
+            # But DB only has "Close" from history.
+            # Actually MarketDB.load_data gives history.
+            # Broker.get_market_price fetches *latest* from DB.
+            # If we are backtesting, "latest" in DB is 2025 (end of history), not `current_date`.
+            # THIS IS A PROBLEM. `SimulatedBroker` querying DB gets "Future Data".
 
-            # 记录当天净值
-            total_value = self.capital + (self.shares * current_price)
+            # FIX: Broker should accept `current_prices` map or `market_data_provider`.
+            # OR: We explicitly pass price to `get_total_value`.
+            # OR: We assume `SimulatedBroker` is strictly for *Live* or we mock `get_market_price`.
+
+            # Solution: Create `BacktestBroker` inheriting `SimulatedBroker` that overrides `get_market_price`.
+            # Or just pass price to `get_total_value`? Broker interface doesn't have it.
+
+            # Quick fix: Calculate total value manually here for report using broker's quantities.
+
+            acct = self.broker.get_account_state()
+            pos = self.broker.get_positions()
+            cash = float(acct["total_cash"])
+            pos_val = sum([float(p["quantity"]) * data_slice.iloc[-1]["Close"] for p in pos if p["ticker"] == self.ticker])
+            total_val = cash + pos_val
+
             self.history.append({
                 "date": current_date,
-                "value": total_value,
-                "price": current_price
+                "value": total_val,
+                "price": data_slice.iloc[-1]["Close"]
             })
 
         self._report()
 
     def _report(self):
         if not self.history:
-            print("回测期间无数据。")
+            print("No data.")
             return
 
-        history_df = pd.DataFrame(self.history).set_index("date")
+        df = pd.DataFrame(self.history).set_index("date")
 
-        final_value = history_df.iloc[-1]["value"]
-        ret = (final_value - self.initial_capital) / self.initial_capital * 100
+        start_val = self.initial_capital
+        end_val = df.iloc[-1]["value"]
+        ret = (end_val - start_val) / start_val * 100
 
-        # 计算基准收益 (Buy & Hold)
-        start_price = history_df.iloc[0]["price"]
-        end_price = history_df.iloc[-1]["price"]
-        benchmark_ret = (end_price - start_price) / start_price * 100
+        print(f"Final Value: {end_val:,.2f}")
+        print(f"Return: {ret:.2f}%")
 
-        print("\n========== 回测报告 ==========")
-        print(f"初始资金: {self.initial_capital:.2f}")
-        print(f"最终净值: {final_value:.2f}")
-        print(f"策略收益: {ret:.2f}%")
-        print(f"基准收益: {benchmark_ret:.2f}% (持有不动)")
+        # Benchmark
+        start_price = df.iloc[0]["price"]
+        end_price = df.iloc[-1]["price"]
+        bench_ret = (end_price - start_price) / start_price * 100
+        print(f"Benchmark: {bench_ret:.2f}%")
 
-        if ret > benchmark_ret:
-            print("✅ 策略跑赢了大盘！")
-        else:
-            print("❌ 策略未跑赢大盘。")
-
-        # 简单的绘图 (保存为文件)
-        plt.figure(figsize=(10, 6))
-        plt.plot(history_df.index, history_df["value"], label="Strategy Value")
-        # 归一化基准以便比较
-        benchmark_curve = history_df["price"] / start_price * self.initial_capital
-        plt.plot(history_df.index, benchmark_curve, label="Benchmark (Buy & Hold)", alpha=0.6)
-        plt.title(f"Backtest Result: {self.ticker}")
+        plt.figure(figsize=(10,6))
+        plt.plot(df.index, df["value"], label="Strategy")
+        # Benchmark scaled
+        plt.plot(df.index, df["price"] / start_price * start_val, label="Benchmark", alpha=0.5)
         plt.legend()
-        plt.grid(True)
+        plt.title(f"Backtest {self.ticker}")
         plt.savefig("backtest_result.png")
-        print("净值曲线已保存至 backtest_result.png")
+        print("Saved plot to backtest_result.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ticker", type=str, default="600519", help="A股代码 (如 600519)")
+    parser.add_argument("--ticker", type=str, default="600519")
     args = parser.parse_args()
 
     bt = Backtester(args.ticker)

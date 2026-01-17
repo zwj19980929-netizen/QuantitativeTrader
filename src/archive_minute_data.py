@@ -3,82 +3,66 @@ import time
 import pandas as pd
 from tqdm import tqdm
 from src.eastmoney_a_crawler.eastmoney_a.client import EastmoneyClient
-from src.eastmoney_a_crawler.eastmoney_a.parsers import parse_klines_to_df, yyyymmdd_of, end_minus_one_day_yyyymmdd
+from src.eastmoney_a_crawler.eastmoney_a.parsers import parse_klines_to_df
 from src.eastmoney_a_crawler.eastmoney_a.secid import secid_of
 from src.database import MarketDB
 
 def fetch_minute_history_safe(client: EastmoneyClient, symbol: str, start: str = "20140101"):
     """
-    Safely fetch minute history, handling API limitations (infinite loop prevention).
-    Based on client.kline_minute_history logic but with loop protection.
+    Safely fetch minute history.
+    Note: EastMoney API currently restricts public minute-level data (klt=1, 5, 15, 30, 60)
+    to approximately 1.5 months (31 trading days).
+    Deep history (10 years) is not available via this endpoint.
+    We fetch the maximum available 5-minute data (klt=5) as it offers the best balance of
+    granularity and retention (approx 1500 records) compared to 1-minute data (only 1 day).
     """
-    klt = 1
-    fqt = 1
-    lmt = 3000
-    end = "29991010"
-
     path = "/api/qt/stock/kline/get"
-    # Reuse the client's http session and secid logic
     secid = secid_of(symbol, client.http)
 
-    cur_end = end
-    chunks = []
-    last_earliest = None
+    # Use parameters found to maximize return (approx 1.5 months)
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "rtntype": "6",
+        "secid": secid,
+        "klt": "5",       # 5-minute data
+        "fqt": "1",       # qfq
+        "beg": "0",       # Start from beginning available
+        "end": "20500000", # Get up to future
+        "ut": "7eea3edcaed734bea9cbfc24409ed989", # Token required for extended history
+        # "lmt" is implicitly handled or capped by API at ~1500
+    }
 
-    while True:
-        params = {
-            "fields1": "f1,f2,f3,f4,f5,f6",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-            "rtntype": "6",
-            "secid": secid,
-            "klt": str(klt),
-            "fqt": str(fqt),
-            "end": cur_end,
-            "lmt": str(min(int(lmt), 3000)),
-        }
-
-        # Use client.http_his to make the request
+    try:
         j = client.http_his.get_json(path, params)
         data = (j or {}).get("data") or {}
         klines = data.get("klines") or []
+
         if not klines:
-            break
+            return pd.DataFrame()
 
         df = parse_klines_to_df(klines)
-        if df.empty:
-            break
 
-        earliest = df["datetime"].min()
+        if not df.empty:
+            # Drop duplicates and sort just in case
+            df = df.drop_duplicates(subset=["datetime"]).sort_values("datetime").reset_index(drop=True)
 
-        # Safety check: if we are not moving backwards, break to avoid infinite loop
-        # This handles the case where API ignores 'end' and returns the same latest data
-        if last_earliest is not None and earliest >= last_earliest:
-            # print(f"[Archive] Detected infinite loop for {symbol} at {earliest}. Stopping.")
-            break
-        last_earliest = earliest
+            # Filter by start date if user requested (though API retention is likely shorter than start request)
+            # df = df[df["datetime"].dt.strftime("%Y%m%d") >= start]
 
-        chunks.append(df)
+        return df
 
-        if yyyymmdd_of(earliest) <= start:
-            break
-
-        # Move backwards
-        cur_end = end_minus_one_day_yyyymmdd(earliest)
-
-    if not chunks:
+    except Exception as e:
+        print(f"[Archive] API Error for {symbol}: {e}")
         return pd.DataFrame()
-
-    out = pd.concat(chunks, ignore_index=True)
-    out = out.drop_duplicates(subset=["datetime"]).sort_values("datetime").reset_index(drop=True)
-    return out
 
 def fetch_and_store_history(client: EastmoneyClient, db: MarketDB, ticker: str, start_date: str = "20140101"):
     try:
-        # Use our safe function instead of client.kline_minute_history
+        # Use our safe function
         df = fetch_minute_history_safe(client, ticker, start=start_date)
 
         if df.empty:
-            print(f"[Archive] No data found for {ticker}")
+            # print(f"[Archive] No data found for {ticker}")
             return False
 
         if "datetime" in df.columns:
@@ -121,7 +105,8 @@ def main():
         print("[Archive] Please specify --ticker or --all")
         return
 
-    print(f"[Archive] Starting archive process for {len(tickers)} tickers from {args.start}...")
+    print(f"[Archive] Starting archive process for {len(tickers)} tickers...")
+    print(f"[Archive] Note: API limits minute data to approx 1.5 months history.")
 
     success_count = 0
 

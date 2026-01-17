@@ -1,6 +1,7 @@
 from src.graph import build_graph
 from src.database import MarketDB, TraderDB
 from src.market_data import MarketDataLoader
+from src.broker import SimulatedBroker
 from src.news import fetch_market_news
 from src.semantic import NewsProcessor
 import time
@@ -19,6 +20,8 @@ def run_live_cycle(ticker: str, silent_if_unchanged=False):
     # 1. 初始化基础设施
     market_db = MarketDB()
     data_loader = MarketDataLoader(market_db)
+    # Initialize Broker (Paper Trading for Live)
+    broker = SimulatedBroker(account_id="live_paper", initial_cash=100000.0, db=market_db)
 
     # 2. 获取情报 (市场数据)
     # data_loader.fetch_and_store(ticker, period="6mo")
@@ -67,7 +70,8 @@ def run_live_cycle(ticker: str, silent_if_unchanged=False):
         "signal": None,
         "risk_assessment": None,
         "execution_result": None,
-        "critique": None
+        "critique": None,
+        "broker": broker # Inject Broker
     }
 
     # 6. 启动智能体系统

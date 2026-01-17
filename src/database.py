@@ -1,5 +1,5 @@
 import pandas as pd
-from sqlalchemy import create_engine, text, Column, Integer, String, Float, DateTime, Text, JSON
+from sqlalchemy import create_engine, text, Column, Integer, String, Float, DateTime, Text, JSON, Boolean, Numeric, Date
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timezone
 import os
@@ -20,170 +20,244 @@ class MarketDB:
         self._init_tables()
 
     def _init_tables(self):
-        """初始化行情表，增加索引以优化查询"""
-        # 注意: 使用 SQLAlchemy Core DDL 或 raw SQL
-        # 这里使用 raw SQL 以保持对 PG 特性的精细控制 (如索引)
+        """初始化资管级表结构"""
         with self.engine.connect() as conn:
-            # 兼容 SQLite (降级模式) 和 PostgreSQL
-            is_sqlite = "sqlite" in self.db_url
+            # 1. 证券元数据表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS instruments (
+                    ticker VARCHAR(20) PRIMARY KEY,
+                    name VARCHAR(100),
+                    market VARCHAR(10),      -- SH/SZ/BJ/US
+                    type VARCHAR(10),        -- STOCK/ETF/INDEX
+                    lot_size INT DEFAULT 100, -- 最小交易单位
+                    fee_rate NUMERIC(10, 6),  -- 预设费率
+                    is_active BOOLEAN DEFAULT TRUE,
+                    listing_date TIMESTAMP,
+                    sector VARCHAR(50)
+                )
+            """))
 
-            if is_sqlite:
-                # SQLite 语法 (分开执行)
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS ohlcv (
-                        ticker VARCHAR(20),
-                        date TIMESTAMP,
-                        open DOUBLE PRECISION,
-                        high DOUBLE PRECISION,
-                        low DOUBLE PRECISION,
-                        close DOUBLE PRECISION,
-                        volume DOUBLE PRECISION,
-                        PRIMARY KEY (ticker, date)
-                    )
-                """))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_date ON ohlcv (date)"))
+            # 2. 改进的行情表 (日线)
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS market_data_daily (
+                    ticker VARCHAR(20),
+                    date TIMESTAMP,  -- SQLite doesn't support DATE type strictly, uses TEXT/NUMERIC
+                    open DOUBLE PRECISION,
+                    high DOUBLE PRECISION,
+                    low DOUBLE PRECISION,
+                    close DOUBLE PRECISION,
+                    volume DOUBLE PRECISION,
+                    adj_factor DOUBLE PRECISION, -- 复权因子
+                    PRIMARY KEY (ticker, date)
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_market_daily_date ON market_data_daily (date)"))
 
-                # 分钟线表 (SQLite)
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS ohlcv_minute (
-                        ticker VARCHAR(20),
-                        date TIMESTAMP,
-                        open DOUBLE PRECISION,
-                        high DOUBLE PRECISION,
-                        low DOUBLE PRECISION,
-                        close DOUBLE PRECISION,
-                        volume DOUBLE PRECISION,
-                        PRIMARY KEY (ticker, date)
-                    )
-                """))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_minute_date ON ohlcv_minute (date)"))
+            # 3. 账户状态表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS account_states (
+                    account_id VARCHAR(50) PRIMARY KEY,
+                    total_cash DOUBLE PRECISION,
+                    available_cash DOUBLE PRECISION,
+                    frozen_cash DOUBLE PRECISION,
+                    currency VARCHAR(10) DEFAULT 'CNY',
+                    updated_at TIMESTAMP
+                )
+            """))
 
-            else:
-                # PostgreSQL 语法 (分开执行)
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS ohlcv (
-                        ticker VARCHAR(20),
-                        date TIMESTAMP,
-                        open DOUBLE PRECISION,
-                        high DOUBLE PRECISION,
-                        low DOUBLE PRECISION,
-                        close DOUBLE PRECISION,
-                        volume DOUBLE PRECISION,
-                        PRIMARY KEY (ticker, date)
-                    )
-                """))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_date ON ohlcv (date)"))
+            # 4. 持仓明细表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS positions (
+                    account_id VARCHAR(50),
+                    ticker VARCHAR(20),
+                    quantity DOUBLE PRECISION,
+                    available_quantity DOUBLE PRECISION,
+                    avg_cost DOUBLE PRECISION,
+                    current_price DOUBLE PRECISION,
+                    last_update TIMESTAMP,
+                    PRIMARY KEY (account_id, ticker)
+                )
+            """))
 
-                # 分钟线表 (PG)
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS ohlcv_minute (
-                        ticker VARCHAR(20),
-                        date TIMESTAMP,
-                        open DOUBLE PRECISION,
-                        high DOUBLE PRECISION,
-                        low DOUBLE PRECISION,
-                        close DOUBLE PRECISION,
-                        volume DOUBLE PRECISION,
-                        PRIMARY KEY (ticker, date)
-                    )
-                """))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_minute_date ON ohlcv_minute (date)"))
+            # 5. 绩效评价表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS portfolio_daily_stats (
+                    date TIMESTAMP,
+                    account_id VARCHAR(50),
+                    total_value DOUBLE PRECISION,
+                    daily_return DOUBLE PRECISION,
+                    sharpe_ratio DOUBLE PRECISION,
+                    max_drawdown DOUBLE PRECISION,
+                    PRIMARY KEY (date, account_id)
+                )
+            """))
+
+            # 6. 分钟线表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS ohlcv_minute (
+                    ticker VARCHAR(20),
+                    date TIMESTAMP,
+                    open DOUBLE PRECISION,
+                    high DOUBLE PRECISION,
+                    low DOUBLE PRECISION,
+                    close DOUBLE PRECISION,
+                    volume DOUBLE PRECISION,
+                    PRIMARY KEY (ticker, date)
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_minute_date ON ohlcv_minute (date)"))
+
+            # Legacy support for ohlcv table if needed by other tools
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS ohlcv (
+                    ticker VARCHAR(20),
+                    date TIMESTAMP,
+                    open DOUBLE PRECISION,
+                    high DOUBLE PRECISION,
+                    low DOUBLE PRECISION,
+                    close DOUBLE PRECISION,
+                    volume DOUBLE PRECISION,
+                    PRIMARY KEY (ticker, date)
+                )
+            """))
 
             conn.commit()
 
-    def save_data(self, ticker: str, df: pd.DataFrame):
-        """保存数据，处理 Upsert (先删后插策略)"""
-        if df.empty:
-            return
+    def save_instruments(self, df: pd.DataFrame):
+        """保存证券元数据"""
+        if df.empty: return
+        df = df.copy()
 
-        df_copy = df.copy()
-        if "Date" not in df_copy.columns:
-            df_copy.reset_index(inplace=True)
+        # Ensure date is a column
+        if "Date" not in df.columns and "date" not in df.columns and "日期" not in df.columns:
+            df.reset_index(inplace=True)
 
-        df_copy["ticker"] = ticker
+        print(f"DEBUG: save_daily_data cols: {df.columns} index name: {df.index.name}", flush=True)
 
-        # 标准化列名
         rename_map = {
-            "Date": "date", "Open": "open", "High": "high",
-            "Low": "low", "Close": "close", "Volume": "volume"
+            "代码": "ticker", "name": "name", "名称": "name",
+            "sector": "sector", "listing_date": "listing_date", "上市日期": "listing_date"
         }
-        df_copy = df_copy.rename(columns=rename_map)
+        df = df.rename(columns=rename_map)
+        if "ticker" not in df.columns: return
 
-        # 选出入库列
-        df_to_save = df_copy[["ticker", "date", "open", "high", "low", "close", "volume"]]
+        if "market" not in df.columns:
+            df["market"] = df["ticker"].apply(lambda x: "SH" if x.startswith("6") else ("SZ" if x.startswith(("0", "3")) else "BJ"))
+        if "type" not in df.columns: df["type"] = "STOCK"
+        if "lot_size" not in df.columns: df["lot_size"] = 100
+        if "fee_rate" not in df.columns: df["fee_rate"] = 0.0003
+        if "is_active" not in df.columns: df["is_active"] = True
 
-        # 确保日期类型
-        df_to_save["date"] = pd.to_datetime(df_to_save["date"])
+        for col in ["listing_date", "sector"]:
+            if col not in df.columns:
+                df[col] = None
 
-        # 转换为 Python datetime 对象以兼容 SQLite
+        df_to_save = df[["ticker", "name", "market", "type", "lot_size", "fee_rate", "is_active", "listing_date", "sector"]]
+
+        if "listing_date" in df_to_save.columns:
+            df_to_save["listing_date"] = pd.to_datetime(df_to_save["listing_date"], errors="coerce")
+
+        with self.engine.begin() as conn:
+            tickers = df_to_save["ticker"].tolist()
+            chunk_size = 500
+            for i in range(0, len(tickers), chunk_size):
+                chunk = tickers[i:i+chunk_size]
+                if not chunk: continue
+                bind_names = [f":t{k}" for k in range(len(chunk))]
+                bind_params = {f"t{k}": t for k, t in enumerate(chunk)}
+                query = text(f"DELETE FROM instruments WHERE ticker IN ({','.join(bind_names)})")
+                conn.execute(query, bind_params)
+
+            df_to_save.to_sql('instruments', conn, if_exists='append', index=False, method='multi', chunksize=500)
+
+        print(f"[MarketDB] Updated {len(df_to_save)} instruments.")
+
+    def save_daily_data(self, ticker: str, df: pd.DataFrame):
+        """保存日线行情 (market_data_daily)"""
+        if df.empty: return
+        df = df.copy()
+
+        # Ensure date is a column
+        if "Date" not in df.columns and "date" not in df.columns and "日期" not in df.columns:
+            df.reset_index(inplace=True)
+
+        rename_map = {
+            "Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume",
+            "日期": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume",
+            "adj_factor": "adj_factor"
+        }
+        df = df.rename(columns=rename_map)
+        df["ticker"] = ticker
+
+        if "adj_factor" not in df.columns:
+            df["adj_factor"] = 1.0
+
+        df["date"] = pd.to_datetime(df["date"])
+
+        cols = ["ticker", "date", "open", "high", "low", "close", "volume", "adj_factor"]
+        df_to_save = df[cols]
+
         min_date = df_to_save["date"].min().to_pydatetime()
         max_date = df_to_save["date"].max().to_pydatetime()
 
-        # 事务处理: 先删除该时间段内的数据，防止主键冲突
         with self.engine.begin() as conn:
             conn.execute(text(
-                "DELETE FROM ohlcv WHERE ticker = :ticker AND date >= :min_date AND date <= :max_date"
+                "DELETE FROM market_data_daily WHERE ticker = :ticker AND date >= :min_date AND date <= :max_date"
             ), {"ticker": ticker, "min_date": min_date, "max_date": max_date})
 
-            # 使用 Pandas 高效写入
-            # chunksize 对 RDS 很重要
-            df_to_save.to_sql('ohlcv', conn, if_exists='append', index=False, method='multi', chunksize=500)
+            df_to_save.to_sql('market_data_daily', conn, if_exists='append', index=False, method='multi', chunksize=1000)
 
-        print(f"[MarketDB] 已存储 {len(df_to_save)} 行 {ticker} 数据。")
+            # Also save to legacy ohlcv for compatibility? No, load_data handles fallback.
+            # But let's populate it just in case some other script queries it directly.
+            # conn.execute(text("DELETE FROM ohlcv WHERE ticker=:ticker AND date>=:min_date AND date<=:max_date"), ...)
+            # df_to_save.drop(columns=["adj_factor"]).to_sql('ohlcv', conn, if_exists='append', index=False, method='multi')
 
     def save_minute_data(self, ticker: str, df: pd.DataFrame):
-        """保存分钟级数据到 ohlcv_minute"""
-        if df.empty:
-            return
+        """保存分钟行情 (ohlcv_minute)"""
+        if df.empty: return
+        df = df.copy()
+        rename_map = {"Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
+        df = df.rename(columns=rename_map)
+        df["ticker"] = ticker
 
-        df_copy = df.copy()
-        if "Date" not in df_copy.columns:
-            df_copy.reset_index(inplace=True)
-
-        df_copy["ticker"] = ticker
-
-        # 标准化列名
-        rename_map = {
-            "Date": "date", "Open": "open", "High": "high",
-            "Low": "low", "Close": "close", "Volume": "volume"
-        }
-        df_copy = df_copy.rename(columns=rename_map)
-
-        df_to_save = df_copy[["ticker", "date", "open", "high", "low", "close", "volume"]]
-        df_to_save["date"] = pd.to_datetime(df_to_save["date"])
+        cols = ["ticker", "date", "open", "high", "low", "close", "volume"]
+        df["date"] = pd.to_datetime(df["date"])
+        df_to_save = df[cols]
 
         min_date = df_to_save["date"].min().to_pydatetime()
         max_date = df_to_save["date"].max().to_pydatetime()
 
-        # 事务处理: 先删除该时间段内的数据
         with self.engine.begin() as conn:
             conn.execute(text(
                 "DELETE FROM ohlcv_minute WHERE ticker = :ticker AND date >= :min_date AND date <= :max_date"
             ), {"ticker": ticker, "min_date": min_date, "max_date": max_date})
-
-            df_to_save.to_sql('ohlcv_minute', conn, if_exists='append', index=False, method='multi', chunksize=500)
-
-        print(f"[MarketDB] 已存储 {len(df_to_save)} 行 {ticker} 分钟数据。")
+            df_to_save.to_sql('ohlcv_minute', conn, if_exists='append', index=False, method='multi', chunksize=1000)
 
     def load_data(self, ticker: str, limit: int = 100) -> pd.DataFrame:
         """从数据库调取历史数据"""
-        query = text(f"SELECT * FROM ohlcv WHERE ticker = :ticker ORDER BY date DESC LIMIT :limit")
-
+        # Try new table
+        query = text(f"SELECT * FROM market_data_daily WHERE ticker = :ticker ORDER BY date DESC LIMIT :limit")
         with self.engine.connect() as conn:
             df = pd.read_sql(query, conn, params={"ticker": ticker, "limit": limit})
+
+        if df.empty:
+            # Fallback
+            try:
+                query_old = text(f"SELECT * FROM ohlcv WHERE ticker = :ticker ORDER BY date DESC LIMIT :limit")
+                with self.engine.connect() as conn:
+                    df = pd.read_sql(query_old, conn, params={"ticker": ticker, "limit": limit})
+            except:
+                pass
 
         if not df.empty:
             df["date"] = pd.to_datetime(df["date"])
             df.set_index("date", inplace=True)
             df.sort_index(inplace=True)
-            # 兼容回测工具类 (恢复大写)
             df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
         return df
 
     def load_minute_data(self, ticker: str, limit: int = 1000) -> pd.DataFrame:
-        """从数据库调取历史分钟数据"""
         query = text(f"SELECT * FROM ohlcv_minute WHERE ticker = :ticker ORDER BY date DESC LIMIT :limit")
-
         with self.engine.connect() as conn:
             df = pd.read_sql(query, conn, params={"ticker": ticker, "limit": limit})
 
@@ -194,27 +268,68 @@ class MarketDB:
             df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
         return df
 
+    # --- Broker Support Methods ---
+    def get_account_state(self, account_id: str):
+        with self.engine.connect() as conn:
+            row = conn.execute(text("SELECT * FROM account_states WHERE account_id = :aid"), {"aid": account_id}).mappings().fetchone()
+        return dict(row) if row else None
+
+    def update_account_state(self, account_id, total, available, frozen, currency="CNY"):
+        with self.engine.begin() as conn:
+            exists = conn.execute(text("SELECT 1 FROM account_states WHERE account_id=:aid"), {"aid": account_id}).scalar()
+            now = datetime.now()
+            if exists:
+                conn.execute(text("""
+                    UPDATE account_states
+                    SET total_cash=:t, available_cash=:a, frozen_cash=:f, updated_at=:u
+                    WHERE account_id=:aid
+                """), {"t": total, "a": available, "f": frozen, "u": now, "aid": account_id})
+            else:
+                conn.execute(text("""
+                    INSERT INTO account_states (account_id, total_cash, available_cash, frozen_cash, currency, updated_at)
+                    VALUES (:aid, :t, :a, :f, :c, :u)
+                """), {"aid": account_id, "t": total, "a": available, "f": frozen, "c": currency, "u": now})
+
+    def get_positions(self, account_id: str):
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("SELECT * FROM positions WHERE account_id = :aid"), {"aid": account_id}).mappings().all()
+        return [dict(r) for r in rows]
+
+    def update_position(self, account_id, ticker, qty, avail, cost, price):
+        with self.engine.begin() as conn:
+            now = datetime.now()
+            if qty <= 1e-6:
+                conn.execute(text("DELETE FROM positions WHERE account_id=:aid AND ticker=:t"), {"aid": account_id, "t": ticker})
+            else:
+                exists = conn.execute(text("SELECT 1 FROM positions WHERE account_id=:aid AND ticker=:t"), {"aid": account_id, "t": ticker}).scalar()
+                if exists:
+                    conn.execute(text("""
+                        UPDATE positions
+                        SET quantity=:q, available_quantity=:aq, avg_cost=:c, current_price=:p, last_update=:u
+                        WHERE account_id=:aid AND ticker=:t
+                    """), {"q": qty, "aq": avail, "c": cost, "p": price, "u": now, "aid": account_id, "t": ticker})
+                else:
+                    conn.execute(text("""
+                        INSERT INTO positions (account_id, ticker, quantity, available_quantity, avg_cost, current_price, last_update)
+                        VALUES (:aid, :t, :q, :aq, :c, :p, :u)
+                    """), {"aid": account_id, "t": ticker, "q": qty, "aq": avail, "c": cost, "p": price, "u": now})
+
+    # --- Legacy Support ---
+    def save_data(self, ticker, df):
+        self.save_daily_data(ticker, df)
+
+    def save_stock_info(self, df):
+        self.save_instruments(df)
+
     def get_existing_tickers(self):
-        """获取数据库中已有的所有股票代码"""
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text("SELECT DISTINCT ticker FROM ohlcv")).fetchall()
+                result = conn.execute(text("SELECT DISTINCT ticker FROM market_data_daily")).fetchall()
             return [row[0] for row in result]
-        except Exception as e:
-            print(f"[MarketDB] 获取代码列表失败: {e}")
+        except:
             return []
 
-    def get_stats(self):
-        """打印数据库统计信息"""
-        try:
-            with self.engine.connect() as conn:
-                count = conn.execute(text("SELECT COUNT(*) FROM ohlcv")).fetchone()[0]
-                tickers = conn.execute(text("SELECT COUNT(DISTINCT ticker) FROM ohlcv")).fetchone()[0]
-            print(f"[MarketDB 统计] 覆盖股票: {tickers} 只, 总数据行数: {count}")
-        except Exception as e:
-            print(f"[MarketDB] 统计失败: {e}")
-
-# --- 交易数据 (SQLite via SQLAlchemy) - 保持不变 ---
+# --- Trade & Reflection Classes (Restored) ---
 Base = declarative_base()
 
 class Trade(Base):
@@ -247,7 +362,6 @@ class TraderDB:
         session.add(trade)
         session.commit()
         session.close()
-        print(f"交易已记录: {action} {ticker} @ {price}")
 
     def add_reflection(self, content, rating, meta=None):
         session = self.Session()
