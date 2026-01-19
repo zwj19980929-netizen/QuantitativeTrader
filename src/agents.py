@@ -142,7 +142,9 @@ def risk_manager_node(state: AgentState) -> AgentState:
         # For simplicity, assuming Broker is up to date or we use Balance
         # User said: "Current cash ... total equity"
         try:
-            account_equity = broker.get_total_value()
+            # Pass current price context for backtest accuracy
+            price_map = {state["ticker"]: price}
+            account_equity = broker.get_total_value(current_prices=price_map)
         except:
             acct = broker.get_account_state()
             if acct: account_equity = float(acct["total_cash"])

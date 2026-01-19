@@ -1,151 +1,114 @@
-# Quantitative Trader Agent (量化交易智能体系统)
+# Quantitative Trader Agent (专业级量化交易智能体系统)
 
 ![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Multi--Agent-green)
-![DuckDB](https://img.shields.io/badge/DuckDB-OLAP-yellow)
-![SQLite](https://img.shields.io/badge/SQLite-OLTP-lightgrey)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-ORM-red)
+![SQLite/PG](https://img.shields.io/badge/DB-Hybrid-lightgrey)
 
-这是一个专业的、基于多智能体协作（Multi-Agent System）的量化交易系统。它不仅仅是一个简单的买卖脚本，而是模拟了一家微型对冲基金的运作架构，将**决策（AI/Logic）**与**执行（Code/Math）**严格解耦。
+这是一个达到**资管级基础设施标准**的量化交易系统。它不仅具备多智能体决策能力，更内置了专业的**账务系统（Accounting System）**、**环境抽象层（Broker Abstraction）**和**全量数据治理（Data Governance）**，解决了传统回测系统“幸存者偏差”、“偷价”和“无法实盘”的痛点。
 
 ---
 
-## 🚀 核心架构
+## 🚀 核心架构升级
 
-本项目基于 **LangGraph** 构建，由四个核心智能体（Agent）组成，它们通过状态图（State Graph）进行协作：
+本项目已完成从“脚本级”到“系统级”的重构，核心组件如下：
 
 ```mermaid
 graph TD
-    Data[数据源: yfinance + DuckDuckGo] --> Strategist
-    Strategist[🧠 策略研究员] -->|生成信号| RiskManager
-    RiskManager[🛡️ 风控官] -->|批准| Executor
-    RiskManager -->|拒绝| Critic
-    Executor[⚡ 交易执行官] -->|执行结果| Critic
-    Critic[📝 复盘分析师] -->|写入长期记忆| Memory[TraderDB]
+    Data[数据源: Akshare + Baostock] --> DB[(MarketDB: 资管级数据库)]
+    DB --> Broker[SimulatedBroker (仿真券商)]
+    Broker -->|账户状态/持仓| Agents
+    Agents -->|交易指令| Broker
+
+    subgraph "智能体集群 (LangGraph)"
+        Strategist[🧠 策略研究员] -->|信号| RiskManager
+        RiskManager[🛡️ 风控官] -->|批准/拒绝| Executor
+        Executor[⚡ 交易执行官] -->|下单| Broker
+        Critic[📝 复盘分析师] -->|记忆写入| VectorMemory
+    end
 ```
 
-1.  **🧠 策略研究员 (Strategist Agent)**
-    *   **职责**：负责寻找 Alpha（超额收益）。
-    *   **能力**：结合**技术面**（RSI, MACD, 均线，由 `pandas_ta` 计算）和**基本面**（通过 DuckDuckGo 搜索实时新闻并进行情绪分析）。
-    *   **输出**：买入/卖出/持有信号。
+### 1. 资管级数据库 (The Vault)
+不再只是简单的 OHLCV，我们构建了完整的金融数据库模式：
+*   **`instruments`**: 证券主数据（代码、名称、上市日期、行业、最小交易单位等），有效规避幸存者偏差。
+*   **`market_data_daily`**: 10年+ 日线复权数据（支持前/后复权因子）。
+*   **`ohlcv_minute`**: 6年+ 分钟级（5分钟）高频数据，捕捉微观结构。
+*   **`account_states`**: 账户资金快照（总资产、可用资金、冻结资金）。
+*   **`positions`**: 实时持仓明细（持仓量、可用量、持仓成本、最新市值）。
 
-2.  **🛡️ 风控官 (Risk Manager Agent)**
-    *   **职责**：守住底线，拥有一票否决权。
-    *   **逻辑**：即使策略师建议买入，如果 RSI 过高（>80）或触发生存概率检测，风控官会强制拦截交易。它还会查阅“长期记忆”，避免重复犯错。
-
-3.  **⚡ 交易执行官 (Execution Agent)**
-    *   **职责**：执行交易。
-    *   **逻辑**：负责记录订单，模拟滑点（Slippage），并将交易落库。
-
-4.  **📝 复盘分析师 (Critic Agent)**
-    *   **职责**：归因分析与记忆强化。
-    *   **逻辑**：无论交易成功还是被拒，它都会生成一段“反思（Reflection）”，存入 `TraderDB`。这些反思会成为未来的决策依据。
-
----
-
-## 🛠️ 技术栈与数据金库
-
-### 1. 混合数据库架构 (The Vault)
-为了兼顾**海量行情分析**与**高频事务处理**，我们采用了双数据库设计：
-
-*   **MarketDB (基于 DuckDB)**
-    *   **用途**：存储 OHLCV（开高低收量）行情数据。
-    *   **特点**：列式存储，极速查询分析，适合处理数百万行 K 线数据。
-
-### 2. 真实数据源 (多源聚合)
-本项目采用了抗限流的多源策略，自动路由请求：
-*   **A股数据**: 优先使用 **AKShare** (源自东方财富/新浪)，备用 **Baostock**。
-*   **美股数据**: 优先使用 **AKShare** (源自东方财富)，备用 **SinaDirect** (直连新浪接口)，最后回退到 **YFinance**。
-*   **新闻**: 接入 `duckduckgo_search` 实时检索。
-*   **TraderDB (基于 SQLite + SQLAlchemy)**
-    *   **用途**：存储交易日志（Trades）、持仓（Positions）和智能体记忆（Reflections）。
-    *   **特点**：轻量级，支持事务，易于管理。
+### 2. 环境抽象层 (Broker Abstraction)
+*   **`AbstractBroker`**: 定义了标准券商接口（获取权益、查询持仓、下单）。
+*   **`SimulatedBroker`**: 内置的高保真回测撮合引擎，严格遵守 T+1 制度（A股）、交易费率扣除和资金验算。智能体只与 Broker 交互，实现**“一套代码，回测实盘无缝切换”**。
 
 ---
 
 ## ⚡ 快速开始
 
 ### 1. 环境准备
-确保你安装了 Python 3.10 或更高版本。
-
 ```bash
 # 克隆仓库
 git clone https://github.com/your-username/quantitative-agent.git
 cd quantitative-agent
 
-# 创建虚拟环境 (推荐)
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
 # 安装依赖
 pip install -r requirements.txt
 ```
 
-### 2. 运行实盘循环
-本项目设计为模块化运行。直接运行主入口，它会启动一个针对 `AAPL` (苹果公司) 的完整交易决策循环：
+### 2. 数据金库初始化 (Data Ingestion)
+在使用系统前，必须初始化本地数据库。我们提供了自动化脚本：
+
+#### 第一步：构建全市场日线库 (10年历史)
+此脚本会自动拉取 A 股所有股票的元数据（Instruments）和 2014 年至今的日线行情。
+```bash
+# 默认拉取全市场（耗时较长，建议首次运行）
+# 数据源：Akshare (东财/新浪)
+python src/archive_daily.py
+
+# 测试模式 (只拉取前2只股票，用于快速验证)
+python src/archive_daily.py --test
+```
+
+#### 第二步：构建分钟线库 (6年历史)
+拉取 2019 年至今的 5 分钟级别高频数据（最精细的免费公开历史数据）。
+```bash
+# 数据源：Baostock
+python src/archive_minute.py
+
+# 测试模式
+python src/archive_minute.py --test
+```
+
+### 3. 回测与策略验证 (Backtesting)
+启动回测引擎。系统会自动加载数据库中的历史数据，通过 `SimulatedBroker` 模拟真实交易流程。
 
 ```bash
-# 单次运行
-python -m src.main --ticker AAPL
-
-# 循环模式 (每5分钟运行一次)
-python -m src.main --ticker AAPL --loop --interval 300
+# 回测贵州茅台 (600519)
+python src/backtest.py --ticker 600519
 ```
+*输出：控制台将打印详细的逐笔交易日志、风控拦截记录，并生成 `backtest_result.png` 净值曲线图。*
 
-### 3. 实战指南：A股存数据与分析
+### 4. 运行实盘/仿真循环 (Live Loop)
+启动实时监控模式。智能体会每隔一定时间（如 5 分钟）获取最新行情，结合新闻情绪进行决策。
 
-#### 第一步：把 A 股数据存到数据库 (装填弹药)
-使用批量下载器，一次性下载数百只股票的历史日线数据。
-
-**命令：下载沪深300成分股 (推荐)**
 ```bash
-python -m src.data_sources.batch_loader --scope hs300 --period 3y
+# 监控模式 (每 300 秒一次)
+python src/main.py --ticker 600519 --loop --interval 300
 ```
 
-**命令：下载指定股票 (如茅台、平安)**
-```bash
-python -m src.data_sources.batch_loader --scope 600519,000001 --period 3y
-```
+---
 
-#### 第二步：实时监控与自动决策 (开火)
-启动智能体进行不间断监控。它会自动获取最新数据（支持增量更新），分析买卖点。
+## 🧠 智能体逻辑详情
 
-**命令：每 3 秒监控一次茅台**
-```bash
-python -m src.main --ticker 600519 --loop --interval 3
-```
-*注：由于 A 股日线每日收盘才更新，高频轮询主要用于捕捉盘后更新或盘中分钟线(需代码升级)。*
-
-#### 第三步：回测分析 (复盘)
-验证策略在历史上的表现，回答“什么时候买卖最赚钱”。
-
-**命令：回测茅台**
-```bash
-python -m src.backtest --ticker 600519
-```
-
-### 4. 额外工具：东方财富爬虫 (学习用)
-如果你想抓取特定的量化数据（如板块资金流向、个股研报），可以运行独立的爬虫工具：
-```bash
-python -m src.eastmoney_a_crawler.eastmoney_a.client
-```
-*注：此脚本仅作学习演示，不参与主程序的自动交易逻辑。*
-
-### 4. 预期输出
-你将看到控制台输出智能体之间的完整对话：
-
-```text
-========== 实盘交易循环: AAPL ==========
-[系统] 正在连接数据金库 (The Vault)...
-[系统] 正在获取 AAPL 的市场数据...
-[市场] AAPL 价格: $259.96
-[系统] 正在扫描 AAPL 的新闻线...
-...
---- [策略研究员] 技术面: RSI=30.82 | 消息面情绪: 0.00 ---
---- [策略研究员] 生成信号: BUY (超卖 (RSI 30.82) 且情绪尚可) ---
---- [风控官] 决策: 批准 (风控通过) ---
---- [交易执行官] 交易已记录: BUY @ 259.96 ---
-...
-```
+1.  **策略研究员 (Strategist)**:
+    *   结合 **RSI/MACD** 技术指标与 **新闻情绪 (Semantic Analysis)**。
+    *   识别“财报动量”、“超卖反弹”和“宏观恐慌”三种市场体制。
+2.  **风控官 (Risk Manager)**:
+    *   **硬约束**: 基于 `Broker` 返回的真实净值，严格控制单票持仓上限（如 20%）。
+    *   **动态仓位**: 使用 **ATR (平均真实波幅)** 计算波动率平价仓位。
+    *   **记忆回溯**: 检索历史相似亏损案例，触发“PTSD”机制减仓。
+3.  **交易执行官 (Executor)**:
+    *   负责将自然语言指令转化为精确的 `broker.submit_order()` 调用。
+    *   自动计算滑点与费率。
 
 ---
 
@@ -153,26 +116,20 @@ python -m src.eastmoney_a_crawler.eastmoney_a.client
 
 ```text
 src/
-├── agents.py       # 四大核心智能体的逻辑实现
-├── database.py     # 数据库层 (DuckDB + SQLite)
-├── graph.py        # LangGraph 状态图定义
-├── main.py         # 程序主入口
-├── market_data.py  # yfinance 数据加载器
-├── news.py         # 新闻搜索工具
-├── state.py        # 共享状态定义 (TypedDict)
-├── tools.py        # 硬核计算工具 (pandas_ta)
-└── tests.py        # 单元测试
+├── agents.py           # 智能体逻辑 (LangGraph Nodes)
+├── broker.py           # 券商抽象层 (SimulatedBroker)
+├── database.py         # 资管级数据库定义 (SQLAlchemy)
+├── backtest.py         # 回测引擎入口
+├── archive_daily.py    # 日线数据清洗入库脚本
+├── archive_minute.py   # 分钟数据清洗入库脚本
+├── main.py             # 实盘/仿真主程序
+├── market_data.py      # 统一数据接口
+├── semantic.py         # 语义分析与新闻处理
+└── tools.py            # 金融计算工具库
 ```
 
 ---
 
-## ⚠️ 免责声明 (Disclaimer)
+## ⚠️ 免责声明
 
-本项目仅供**学习与研究使用**。
-1.  **非投资建议**：本系统生成的任何信号都不构成投资建议。
-2.  **模拟交易**：默认配置下，本系统仅进行**模拟交易**（Paper Trading），不会连接真实券商账户，也不会使用真实资金。
-3.  **风险自负**：量化交易存在极高风险，开发者不对任何因使用本项目而导致的资金损失负责。
-
----
-
-**Made with ❤️ by Python & AI**
+本项目仅供计算机科学与金融工程**学习研究使用**。实盘交易有风险，入市需谨慎。开发者不对任何因使用本软件产生的资金损失承担责任。

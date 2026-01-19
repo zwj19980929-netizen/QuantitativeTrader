@@ -133,7 +133,11 @@ class SimulatedBroker(AbstractBroker):
         print(f"[Broker] Executed {action} {quantity} {ticker} @ {exec_price:.2f}")
         return True
 
-    def get_total_value(self) -> float:
+    def get_total_value(self, current_prices: Optional[Dict[str, float]] = None) -> float:
+        """
+        Calculate total equity.
+        :param current_prices: Optional dict {ticker: price} for backtesting point-in-time valuation.
+        """
         state = self.get_account_state()
         if not state: return 0.0
 
@@ -142,9 +146,12 @@ class SimulatedBroker(AbstractBroker):
         positions = self.get_positions()
         market_value = 0.0
         for p in positions:
-            # Ideally fetch latest price. For speed using 'current_price' stored in position (updated via update_prices? or submit_order)
-            # or fetch now.
-            price = self.get_market_price(p["ticker"])
+            ticker = p["ticker"]
+            if current_prices and ticker in current_prices:
+                price = current_prices[ticker]
+            else:
+                price = self.get_market_price(ticker)
+
             market_value += float(p["quantity"]) * price
 
         return cash + market_value
