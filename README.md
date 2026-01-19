@@ -32,7 +32,7 @@ graph TD
 不再只是简单的 OHLCV，我们构建了完整的金融数据库模式：
 *   **`instruments`**: 证券主数据（代码、名称、上市日期、行业、最小交易单位等），有效规避幸存者偏差。
 *   **`market_data_daily`**: 10年+ 日线复权数据（支持前/后复权因子）。
-*   **`ohlcv_minute`**: 6年+ 分钟级（5分钟）高频数据，捕捉微观结构。
+*   **`ohlcv_minute`**: 支持 10年+ 1分钟级 (EastMoney) 或 6年+ 5分钟级 (Baostock) 高频数据。
 *   **`account_states`**: 账户资金快照（总资产、可用资金、冻结资金）。
 *   **`positions`**: 实时持仓明细（持仓量、可用量、持仓成本、最新市值）。
 
@@ -68,14 +68,21 @@ python src/archive_daily.py
 python src/archive_daily.py --test
 ```
 
-#### 第二步：构建分钟线库 (6年历史)
-拉取 2019 年至今的 5 分钟级别高频数据（最精细的免费公开历史数据）。
-```bash
-# 数据源：Baostock
-python src/archive_minute.py
+#### 第二步：构建分钟线库 (Two Options)
 
-# 测试模式
-python src/archive_minute.py --test
+**选项 A: 1分钟级数据 (推荐 - 东财源)**
+支持拉取全市场 A 股最近 3 个月（或更长）的 **1分钟** K线，包含成交额和换手率。
+详见 [README_CRAWLER.md](README_CRAWLER.md)。
+
+```bash
+# 拉取全市场最近 3 个月的 1分钟数据
+python src/archive_minute_eastmoney.py --all --months 3
+```
+
+**选项 B: 5分钟级数据 (Baostock)**
+拉取 2019 年至今的 5 分钟级别数据。
+```bash
+python src/archive_minute.py
 ```
 
 ### 3. 回测与策略验证 (Backtesting)
