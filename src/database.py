@@ -3,6 +3,11 @@ from sqlalchemy import create_engine, text, Column, Integer, String, Float, Date
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timezone
 import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # --- 市场数据 (PostgreSQL) ---
 class MarketDB:

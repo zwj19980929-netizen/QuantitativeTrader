@@ -16,3 +16,4 @@ baostock
 matplotlib
 tqdm
 psycopg2-binary
+python-dotenv
