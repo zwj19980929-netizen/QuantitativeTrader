@@ -103,6 +103,9 @@ class Backtester:
                 "price": data_slice.iloc[-1]["Close"]
             })
 
+            # Settle trades (T+1) at end of day
+            self.broker.settle()
+
         self._report()
 
     def _report(self):

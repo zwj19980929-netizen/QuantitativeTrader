@@ -82,7 +82,8 @@ class SimulatedBroker(AbstractBroker):
         fee_rate = 0.0003
 
         trade_amount = exec_price * quantity
-        fee = trade_amount * fee_rate
+        # Small capital optimization: Enforce Minimum Fee (CNY 5.0)
+        fee = max(5.0, trade_amount * fee_rate)
 
         if action == "BUY":
             cost = trade_amount + fee
@@ -100,20 +101,27 @@ class SimulatedBroker(AbstractBroker):
             pos = positions.get(ticker)
             if pos:
                 new_qty = float(pos["quantity"]) + quantity
+                # Available qty does not increase immediately (T+1 rule)
+                avail_qty = float(pos["available_quantity"])
+
                 # Avg cost weighted average
                 old_cost_total = float(pos["quantity"]) * float(pos["avg_cost"])
                 new_cost_total = old_cost_total + cost
                 new_avg = new_cost_total / new_qty
-                self.db.update_position(self.account_id, ticker, new_qty, new_qty, new_avg, exec_price)
+                self.db.update_position(self.account_id, ticker, new_qty, avail_qty, new_avg, exec_price)
             else:
-                self.db.update_position(self.account_id, ticker, quantity, quantity, exec_price, exec_price) # avg_cost includes fee implicitly if we used cost, but strictly avg_cost is price. Let's use price + fee/qty? Usually just price.
-                # Actually, cost basis usually includes fees.
-                self.db.update_position(self.account_id, ticker, quantity, quantity, (trade_amount + fee)/quantity, exec_price)
+                # Available qty = 0 initially (T+1)
+                self.db.update_position(self.account_id, ticker, quantity, 0, (trade_amount + fee)/quantity, exec_price)
 
         elif action == "SELL":
             pos = positions.get(ticker)
-            if not pos or float(pos["available_quantity"]) < quantity:
-                print(f"[Broker] Insufficient position for {ticker}")
+            if not pos:
+                print(f"[Broker] No position for {ticker}")
+                return False
+
+            avail_qty = float(pos["available_quantity"])
+            if avail_qty < quantity:
+                print(f"[Broker] Insufficient sellable position for {ticker} (Available: {avail_qty}, Requested: {quantity}). T+1 rule?")
                 return False
 
             proceeds = trade_amount - fee
@@ -125,13 +133,29 @@ class SimulatedBroker(AbstractBroker):
 
             # Update Position
             new_qty = float(pos["quantity"]) - quantity
+            new_avail = avail_qty - quantity
+
             if new_qty < 1e-6:
                 self.db.update_position(self.account_id, ticker, 0, 0, 0, 0)
             else:
-                self.db.update_position(self.account_id, ticker, new_qty, new_qty, float(pos["avg_cost"]), exec_price)
+                self.db.update_position(self.account_id, ticker, new_qty, new_avail, float(pos["avg_cost"]), exec_price)
 
         print(f"[Broker] Executed {action} {quantity} {ticker} @ {exec_price:.2f}")
         return True
+
+    def settle(self):
+        """
+        Settle trades (T+1). Make all quantity available.
+        Call this at End of Day.
+        """
+        positions = self.get_positions()
+        for p in positions:
+            qty = float(p["quantity"])
+            avail = float(p["available_quantity"])
+            if avail < qty:
+                # Update available to match total
+                self.db.update_position(self.account_id, p["ticker"], qty, qty, float(p["avg_cost"]), float(p["current_price"]))
+        # print("[Broker] Settled positions (T+1).")
 
     def get_total_value(self, current_prices: Optional[Dict[str, float]] = None) -> float:
         """

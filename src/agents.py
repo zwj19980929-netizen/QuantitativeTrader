@@ -22,6 +22,9 @@ def strategist_node(state: AgentState) -> AgentState:
 
     rsi = analysis["rsi_14"]
     price = analysis["current_price"]
+    vwap = analysis.get("vwap")
+    amount_ratio = analysis.get("amount_ratio", 1.0)
+    turnover = analysis.get("turnover", 0.0)
 
     # 2. 语义分析 (从“漏斗”中提取特征)
     news_list = state.get("news", [])
@@ -31,7 +34,7 @@ def strategist_node(state: AgentState) -> AgentState:
     confidence = semantic_features["confidence"]
     topics = semantic_features["topics"]
 
-    print(f"--- [策略研究员] 技术面: RSI={rsi:.2f} | 语义特征: 情绪={news_score:.2f}, 置信度={confidence:.2f}, 主题={topics} ---")
+    print(f"--- [策略研究员] 技术面: RSI={rsi:.2f}, VWAP={vwap if vwap else 'N/A'}, 放量比={amount_ratio:.2f} | 语义特征: 情绪={news_score:.2f}, 置信度={confidence:.2f} ---")
 
     # 3. 混合决策逻辑 (逻辑驱动)
     signal = {"action": "HOLD", "confidence": 0.0, "reason": "中性市场"}
@@ -39,8 +42,22 @@ def strategist_node(state: AgentState) -> AgentState:
     # --- 基础评分系统 ---
     base_confidence = 0.5
 
+    # 短线逻辑增强
+    # 均价线判断: Price > VWAP (强势)
+    is_above_vwap = (price > vwap) if vwap else False
+    # 放量判断: Amount > 2x Avg
+    is_high_volume = (amount_ratio > 2.0)
+
+    # 规则 0: 短线放量突破 (Short-Term Breakout)
+    if is_high_volume and is_above_vwap and news_score > -0.2:
+        signal = {
+            "action": "BUY",
+            "confidence": 0.75 + (0.1 if news_score > 0.2 else 0),
+            "reason": f"短线放量 (x{amount_ratio:.1f}) 且站上均价线"
+        }
+
     # 规则 1: 财报季动量 (Earnings Momentum)
-    if "Earnings" in topics:
+    elif "Earnings" in topics:
         if news_score > 0.3:
             signal = {
                 "action": "BUY",
@@ -58,10 +75,17 @@ def strategist_node(state: AgentState) -> AgentState:
     elif rsi < 30: # 深度超卖
         # 只要新闻不是极度负面，就尝试抄底
         if news_score > -0.6:
+            # 增强: 如果有放量配合，信心增加
+            conf = 0.7
+            reason = f"深度超卖 (RSI {rsi:.2f})"
+            if is_high_volume:
+                conf += 0.1
+                reason += " 且底部放量"
+
             signal = {
                 "action": "BUY",
-                "confidence": 0.7,
-                "reason": f"深度超卖 (RSI {rsi:.2f}) 且基本面未恶化"
+                "confidence": conf,
+                "reason": reason
             }
     elif rsi > 70: # 超买
          signal = {

@@ -88,15 +88,40 @@ if run_btn:
     with col1:
         st.subheader("📈 市场走势与信号")
 
-        # 绘制 K 线图
-        fig = go.Figure(data=[go.Candlestick(x=df.index,
+        # 绘制 K 线图 + 成交量
+        fig = go.Figure()
+
+        # Candlestick
+        fig.add_trace(go.Candlestick(x=df.index,
                         open=df['Open'],
                         high=df['High'],
                         low=df['Low'],
-                        close=df['Close'])])
+                        close=df['Close'],
+                        name="OHLC"))
 
+        # Volume (Bar) - utilizing secondary y-axis or separate subplot?
+        # For simplicity, just adding it might obscure the price if scales differ.
+        # But Plotly handles this if we use subplots.
+        # However, purely adding a trace on same axis is bad.
+        # Let's keep it simple: Add Volume as a bar chart if 'Volume' exists.
+
+        # Actually, let's just update layout to show rangeslider
         fig.update_layout(height=500, title=f"{ticker} Price Action")
+
         st.plotly_chart(fig, use_container_width=True)
+
+        # Separate Volume Chart
+        if 'Volume' in df.columns:
+            st.caption("成交量 (Volume)")
+            vol_fig = go.Figure(data=[go.Bar(x=df.index, y=df['Volume'])])
+            vol_fig.update_layout(height=150, margin=dict(t=0, b=0))
+            st.plotly_chart(vol_fig, use_container_width=True)
+
+        if 'Amount' in df.columns:
+            st.caption("成交额 (Amount)")
+            amt_fig = go.Figure(data=[go.Bar(x=df.index, y=df['Amount'], marker_color='orange')])
+            amt_fig.update_layout(height=150, margin=dict(t=0, b=0))
+            st.plotly_chart(amt_fig, use_container_width=True)
 
     with col2:
         st.subheader("🧠 智能体对话")
