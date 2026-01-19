@@ -211,10 +211,12 @@ def executor_node(state: AgentState) -> AgentState:
     shares = risk.get("target_shares", 0)
     broker = state.get("broker")
 
+    executed_shares = 0
     if broker:
         # 使用 Broker 执行
         if signal["action"] == "BUY":
-            broker.submit_order(state["ticker"], "BUY", shares, price=price)
+            if broker.submit_order(state["ticker"], "BUY", shares, price=price):
+                executed_shares = shares
         elif signal["action"] == "SELL":
             # 卖出逻辑：卖出多少？Risk Manager 应该决定卖出数量
             # 目前 Risk Manager 只计算 Target Shares (Buying)
@@ -225,10 +227,10 @@ def executor_node(state: AgentState) -> AgentState:
                 if p["ticker"] == state["ticker"]:
                     qty = float(p["available_quantity"])
                     if qty > 0:
-                        broker.submit_order(state["ticker"], "SELL", qty, price=price)
-                        shares = qty # Update shares for logging
-
+                        if broker.submit_order(state["ticker"], "SELL", qty, price=price):
+                            executed_shares = qty
     else:
+        executed_shares = shares
         # Fallback to DB logging only (Legacy)
         db = TraderDB()
         db.log_trade(
@@ -240,11 +242,11 @@ def executor_node(state: AgentState) -> AgentState:
         )
 
     result = {
-        "status": "FILLED",
+        "status": "FILLED" if executed_shares > 0 else "SKIPPED",
         "ticker": state["ticker"],
         "action": signal["action"],
         "price": price,
-        "shares": shares
+        "shares": executed_shares
     }
     state["execution_result"] = result
     print(f"--- [交易执行官] 交易已记录: {signal['action']} {shares} @ {price:.2f} ---")
