@@ -32,14 +32,25 @@ def archive_minute(test_mode=False):
 
     # Baostock 5-min data usually available from ~2019/2020
     # We try from 2019 to now
-    start_year = 2019
+    default_start_year = 2019
     current_year = datetime.datetime.now().year
 
-    print(f"[Archive Minute] Starting 5-min archive for {len(tickers)} stocks from {start_year}...", flush=True)
+    print(f"[Archive Minute] Starting 5-min archive for {len(tickers)} stocks...", flush=True)
 
     pbar = tqdm(tickers)
     for ticker in pbar:
         pbar.set_description(f"Processing {ticker}")
+
+        # Check resume point
+        latest_date = db.get_latest_minute_date(ticker)
+        start_year = default_start_year
+
+        if latest_date:
+            # If data is up-to-date (e.g., yesterday or today), skip
+            if (datetime.datetime.now() - latest_date).days < 2:
+                # pbar.set_description(f"Skipping {ticker} (Up-to-date)")
+                continue
+            start_year = latest_date.year
 
         # Convert to Baostock format
         if ticker.startswith("6"):
@@ -53,6 +64,13 @@ def archive_minute(test_mode=False):
         for year in range(start_year, current_year + 1):
             start_dt = f"{year}-01-01"
             end_dt = f"{year}-12-31"
+
+            # If resuming in the same year, adjust start date
+            if latest_date and year == latest_date.year:
+                start_dt = (latest_date + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+                # If start_dt > end_dt (e.g. latest was Dec 31), loop continues to next year effectively or returns empty
+                if start_dt > end_dt:
+                    continue
 
             try:
                 # Using adjustflag="2" (qfq)
