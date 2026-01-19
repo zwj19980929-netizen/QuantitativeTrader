@@ -15,7 +15,7 @@ def get_stock_list():
 
 def archive_minute(test_mode=False):
     db = MarketDB()
-    print("[Archive Minute] Fetching stock list via Akshare...", flush=True)
+    print("[Archive Minute] Fetching stock list via Akshare (loading pages)...", flush=True)
     tickers = get_stock_list()
     if not tickers:
         print("[Archive Minute] Failed to get stock list.")

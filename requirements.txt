@@ -16,7 +16,3 @@ baostock
 matplotlib
 tqdm
 psycopg2-binary
-requests>=2.31
-pandas>=2.0
-pyarrow>=14.0
-

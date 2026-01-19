@@ -7,9 +7,10 @@ import argparse
 
 def archive_daily(test_mode=False):
     db = MarketDB()
-    print("[Archive Daily] Fetching stock list via Akshare...", flush=True)
+    print("[Archive Daily] Fetching stock list via Akshare (loading pages)...", flush=True)
 
     # 获取实时行情以得到所有代码
+    # Note: akshare internal tqdm shows page progress (approx 60 pages)
     spot_df = ak.stock_zh_a_spot_em()
     if spot_df.empty:
         print("[Archive Daily] Failed to fetch stock list.")
