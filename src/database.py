@@ -56,11 +56,22 @@ class MarketDB:
                     low DOUBLE PRECISION,
                     close DOUBLE PRECISION,
                     volume DOUBLE PRECISION,
+                    amount DOUBLE PRECISION,
+                    turnover DOUBLE PRECISION,
                     adj_factor DOUBLE PRECISION, -- 复权因子
                     PRIMARY KEY (ticker, date)
                 )
             """))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_market_daily_date ON market_data_daily (date)"))
+
+            try:
+                conn.execute(text("ALTER TABLE market_data_daily ADD COLUMN amount DOUBLE PRECISION"))
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE market_data_daily ADD COLUMN turnover DOUBLE PRECISION"))
+            except Exception:
+                pass
 
             # 3. 账户状态表
             conn.execute(text("""
@@ -111,10 +122,22 @@ class MarketDB:
                     low DOUBLE PRECISION,
                     close DOUBLE PRECISION,
                     volume DOUBLE PRECISION,
+                    amount DOUBLE PRECISION,
+                    turnover DOUBLE PRECISION,
                     PRIMARY KEY (ticker, date)
                 )
             """))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_ohlcv_minute_date ON ohlcv_minute (date)"))
+
+            # Schema Migration for existing tables
+            try:
+                conn.execute(text("ALTER TABLE ohlcv_minute ADD COLUMN amount DOUBLE PRECISION"))
+            except Exception:
+                pass
+            try:
+                conn.execute(text("ALTER TABLE ohlcv_minute ADD COLUMN turnover DOUBLE PRECISION"))
+            except Exception:
+                pass
 
             # Legacy support for ohlcv table if needed by other tools
             conn.execute(text("""
@@ -190,7 +213,9 @@ class MarketDB:
 
         rename_map = {
             "Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume",
+            "Amount": "amount", "Turnover": "turnover",
             "日期": "date", "开盘": "open", "最高": "high", "最低": "low", "收盘": "close", "成交量": "volume",
+            "成交额": "amount", "换手率": "turnover",
             "adj_factor": "adj_factor"
         }
         df = df.rename(columns=rename_map)
@@ -199,9 +224,13 @@ class MarketDB:
         if "adj_factor" not in df.columns:
             df["adj_factor"] = 1.0
 
+        for col in ["amount", "turnover"]:
+            if col not in df.columns:
+                df[col] = None
+
         df["date"] = pd.to_datetime(df["date"])
 
-        cols = ["ticker", "date", "open", "high", "low", "close", "volume", "adj_factor"]
+        cols = ["ticker", "date", "open", "high", "low", "close", "volume", "amount", "turnover", "adj_factor"]
         df_to_save = df[cols]
 
         min_date = df_to_save["date"].min().to_pydatetime()
@@ -223,12 +252,24 @@ class MarketDB:
         """保存分钟行情 (ohlcv_minute)"""
         if df.empty: return
         df = df.copy()
-        rename_map = {"Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
+        # Ensure column names match
+        rename_map = {
+            "Date": "date", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume",
+            "Amount": "amount", "Turnover": "turnover",
+            "datetime": "date", "amount": "amount", "turnover": "turnover", "volume": "volume",
+            "open": "open", "high": "high", "low": "low", "close": "close"
+        }
         df = df.rename(columns=rename_map)
         df["ticker"] = ticker
 
-        cols = ["ticker", "date", "open", "high", "low", "close", "volume"]
+        # Add missing columns if they don't exist
+        for col in ["amount", "turnover"]:
+            if col not in df.columns:
+                df[col] = None
+
+        cols = ["ticker", "date", "open", "high", "low", "close", "volume", "amount", "turnover"]
         df["date"] = pd.to_datetime(df["date"])
+        # Filter to only cols that exist (to be safe, though we ensured them above)
         df_to_save = df[cols]
 
         min_date = df_to_save["date"].min().to_pydatetime()
@@ -260,7 +301,12 @@ class MarketDB:
             df["date"] = pd.to_datetime(df["date"])
             df.set_index("date", inplace=True)
             df.sort_index(inplace=True)
-            df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
+            # Standardize column names for downstream usage
+            rename_map = {
+                "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume",
+                "amount": "Amount", "turnover": "Turnover"
+            }
+            df.rename(columns=rename_map, inplace=True)
         return df
 
     def get_latest_minute_date(self, ticker: str) -> datetime:
@@ -282,7 +328,12 @@ class MarketDB:
             df["date"] = pd.to_datetime(df["date"])
             df.set_index("date", inplace=True)
             df.sort_index(inplace=True)
-            df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
+            # Standardize column names
+            rename_map = {
+                "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume",
+                "amount": "Amount", "turnover": "Turnover"
+            }
+            df.rename(columns=rename_map, inplace=True)
         return df
 
     # --- Broker Support Methods ---
