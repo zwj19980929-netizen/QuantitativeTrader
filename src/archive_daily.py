@@ -1,5 +1,5 @@
 import akshare as ak
-import pandas as pd
+
 from tqdm import tqdm
 from src.database import MarketDB
 import time
