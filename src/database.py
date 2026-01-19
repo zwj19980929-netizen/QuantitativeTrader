@@ -19,6 +19,10 @@ class MarketDB:
             print("[MarketDB] 警告: 未检测到环境变量 DB_URL。")
             print("[MarketDB] 降级模式: 使用本地 SQLite (market_data_local.db) 进行测试。")
             self.db_url = "sqlite:///market_data_local.db"
+        else:
+            # Mask password for logging
+            safe_url = self.db_url.split("@")[-1] if "@" in self.db_url else "..."
+            print(f"[MarketDB] 已连接到外部数据库: {safe_url}")
 
         # pool_size 控制连接池
         self.engine = create_engine(self.db_url, pool_size=5, max_overflow=10)
@@ -136,8 +140,6 @@ class MarketDB:
         # Ensure date is a column
         if "Date" not in df.columns and "date" not in df.columns and "日期" not in df.columns:
             df.reset_index(inplace=True)
-
-        print(f"DEBUG: save_daily_data cols: {df.columns} index name: {df.index.name}", flush=True)
 
         rename_map = {
             "代码": "ticker", "name": "name", "名称": "name",
