@@ -256,6 +256,16 @@ class MarketDB:
             df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
         return df
 
+    def get_latest_minute_date(self, ticker: str) -> datetime:
+        """获取某股票分钟线的最新日期"""
+        query = text("SELECT MAX(date) FROM ohlcv_minute WHERE ticker = :ticker")
+        with self.engine.connect() as conn:
+            res = conn.execute(query, {"ticker": ticker}).scalar()
+        if res:
+            # SQLAlchemy might return str or datetime depending on driver
+            return pd.to_datetime(res)
+        return None
+
     def load_minute_data(self, ticker: str, limit: int = 1000) -> pd.DataFrame:
         query = text(f"SELECT * FROM ohlcv_minute WHERE ticker = :ticker ORDER BY date DESC LIMIT :limit")
         with self.engine.connect() as conn:
