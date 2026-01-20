@@ -47,7 +47,7 @@ def get_target_tickers(db: MarketDB, client: EastmoneyClient, fetch_all: bool = 
         return ["600519", "300391", "688380"]
 
 
-def process_single_ticker(ticker, db, client, cutoff_date_str):
+def process_single_ticker(ticker, db, client, cutoff_date_str, klt=5):
     """
     处理单只股票。
     注意：client.kline_minute_history 内部已有翻页逻辑。
@@ -62,6 +62,7 @@ def process_single_ticker(ticker, db, client, cutoff_date_str):
 
         if latest_dt:
             # 如果已有数据是 1 天内的，跳过
+            # 注意：如果 klt 变更了，可能需要重新校验逻辑，这里暂时简单处理
             if (datetime.now() - latest_dt).days < 1:
                 return "Up-to-date"
 
@@ -71,10 +72,9 @@ def process_single_ticker(ticker, db, client, cutoff_date_str):
                 start_date = db_dt_str
 
         # 2. 调用底层 Client 获取历史（内部带分页）
-        # 这里 klt=5 代表 5分钟
         df = client.kline_minute_history(
             symbol=ticker,
-            klt=5,
+            klt=klt,
             start=start_date,
             end="20991231"
         )
@@ -121,7 +121,7 @@ def process_single_ticker(ticker, db, client, cutoff_date_str):
         return f"Error: {str(e)}"
 
 
-def archive_minute_data(months: int, fetch_all: bool, workers: int):
+def archive_minute_data(months: int, fetch_all: bool, workers: int, klt: int = 5):
     db = MarketDB()
     client_main = EastmoneyClient()
 
@@ -134,12 +134,12 @@ def archive_minute_data(months: int, fetch_all: bool, workers: int):
     cutoff_date = datetime.now() - timedelta(days=months * 30)
     cutoff_date_str = cutoff_date.strftime("%Y%m%d")
 
-    print(f"[-] 任务启动 | 起始日期: {cutoff_date_str} | 线程数: {workers}")
+    print(f"[-] 任务启动 | 起始日期: {cutoff_date_str} | 线程数: {workers} | K线周期: {klt}")
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        # 【修复】这里传递 4 个参数，匹配 process_single_ticker 的定义
+        # 【修复】这里传递参数匹配 process_single_ticker 的定义
         futures = {
-            executor.submit(process_single_ticker, t, db, client_main, cutoff_date_str): t
+            executor.submit(process_single_ticker, t, db, client_main, cutoff_date_str, klt): t
             for t in tickers
         }
 
@@ -160,7 +160,8 @@ if __name__ == "__main__":
     parser.add_argument("--all", action="store_true", help="抓取全量股票")
     parser.add_argument("--months", type=int, default=12, help="获取历史月数")
     parser.add_argument("--workers", type=int, default=8, help="并发线程数")
+    parser.add_argument("--klt", type=int, default=5, help="K线周期 (1=1分钟, 5=5分钟)")
 
     args = parser.parse_args()
 
-    archive_minute_data(months=args.months, fetch_all=args.all, workers=args.workers)
+    archive_minute_data(months=args.months, fetch_all=args.all, workers=args.workers, klt=args.klt)

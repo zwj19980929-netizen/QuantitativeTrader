@@ -106,7 +106,14 @@ class EastmoneyClient:
             chunks.append(df)
 
             earliest = df["datetime"].min()
-            if yyyymmdd_of(earliest) <= start:
+            earliest_str = yyyymmdd_of(earliest)
+
+            # 检测 API 是否忽略了 end 参数 (防止死循环)
+            # 如果返回的最早时间比请求的截止时间还晚，说明 API 返回了最新数据而不是历史数据
+            if earliest_str > cur_end:
+                break
+
+            if earliest_str <= start:
                 break
 
             # 往前翻页
