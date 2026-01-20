@@ -71,8 +71,9 @@ def archive_minute(test_mode=False):
                     continue
 
             try:
-                # 修复1：增加 amount (Baostock 分钟线不支持 turn 换手率)
+                # 修复1：增加 amount (Baostock 分钟线暂时不支持 turn 换手率，暂时保留字段名以备拓展)
                 # Using adjustflag="2" (qfq)
+                # fields="date,time,open,high,low,close,volume,amount,turn"
                 rs = bs.query_history_k_data_plus(code,
                     "date,time,open,high,low,close,volume,amount",
                     start_date=start_dt, end_date=end_dt,
@@ -100,15 +101,15 @@ def archive_minute(test_mode=False):
             # Baostock time format: YYYYMMDDHHMMSSsss
             full_df["date"] = pd.to_datetime(full_df["time"], format="%Y%m%d%H%M%S000")
 
-            # 修复2：增加映射关系
+            # 修复2：增加映射关系 (turn保留备用)
             rename_map = {
                 "open": "open", "high": "high", "low": "low", "close": "close",
-                "volume": "volume", "amount": "amount"
+                "volume": "volume", "amount": "amount", # "turn": "turnover"
             }
             full_df = full_df.rename(columns=rename_map)
 
             # 修复3：确保所有列转换为浮点数
-            cols_to_float = ["open", "high", "low", "close", "volume", "amount"]
+            cols_to_float = ["open", "high", "low", "close", "volume", "amount"] # + ["turnover"]
             # 只有当列存在时才转换，防止Baostock偶尔没返回某些列报错
             existing_cols = [c for c in cols_to_float if c in full_df.columns]
             full_df = full_df.astype({c: float for c in existing_cols})
