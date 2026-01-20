@@ -48,7 +48,6 @@ def archive_minute(test_mode=False):
         if latest_date:
             # If data is up-to-date (e.g., yesterday or today), skip
             if (datetime.datetime.now() - latest_date).days < 2:
-                # pbar.set_description(f"Skipping {ticker} (Up-to-date)")
                 continue
             start_year = latest_date.year
 
@@ -68,14 +67,14 @@ def archive_minute(test_mode=False):
             # If resuming in the same year, adjust start date
             if latest_date and year == latest_date.year:
                 start_dt = (latest_date + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-                # If start_dt > end_dt (e.g. latest was Dec 31), loop continues to next year effectively or returns empty
                 if start_dt > end_dt:
                     continue
 
             try:
+                # 修复1：增加 amount 和 turn 字段
                 # Using adjustflag="2" (qfq)
                 rs = bs.query_history_k_data_plus(code,
-                    "date,time,open,high,low,close,volume",
+                    "date,time,open,high,low,close,volume,amount,turn",
                     start_date=start_dt, end_date=end_dt,
                     frequency="5", adjustflag="2")
 
@@ -97,12 +96,18 @@ def archive_minute(test_mode=False):
             # Baostock time format: YYYYMMDDHHMMSSsss
             full_df["date"] = pd.to_datetime(full_df["time"], format="%Y%m%d%H%M%S000")
 
+            # 修复2：增加映射关系
             rename_map = {
-                "open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"
+                "open": "open", "high": "high", "low": "low", "close": "close",
+                "volume": "volume", "amount": "amount", "turn": "turnover"
             }
             full_df = full_df.rename(columns=rename_map)
 
-            full_df = full_df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+            # 修复3：确保所有列转换为浮点数
+            cols_to_float = ["open", "high", "low", "close", "volume", "amount", "turnover"]
+            # 只有当列存在时才转换，防止Baostock偶尔没返回某些列报错
+            existing_cols = [c for c in cols_to_float if c in full_df.columns]
+            full_df = full_df.astype({c: float for c in existing_cols})
 
             db.save_minute_data(ticker, full_df)
 
