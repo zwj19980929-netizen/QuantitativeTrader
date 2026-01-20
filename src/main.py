@@ -1,6 +1,7 @@
 from src.graph import build_graph
 from src.database import MarketDB, TraderDB
 from src.market_data import MarketDataLoader
+from src.broker import SimulatedBroker
 from src.news import fetch_market_news
 from src.semantic import NewsProcessor
 import time
@@ -10,22 +11,21 @@ import sys
 # 初始化语义处理器
 news_processor = NewsProcessor()
 
+from src.scanner import StockScanner
+
 # 全局变量记录上一次状态，用于减少刷屏
 last_state = {}
 
-def run_live_cycle(ticker: str, silent_if_unchanged=False):
+def run_live_cycle(ticker: str, broker, market_db, silent_if_unchanged=False):
     global last_state
 
-    # 1. 初始化基础设施
-    market_db = MarketDB()
+    # 1. 基础设施 (传入)
     data_loader = MarketDataLoader(market_db)
 
     # 2. 获取情报 (市场数据)
-    # data_loader.fetch_and_store(ticker, period="6mo")
-    # 注意: 为了性能，fetch_and_store 内部最好有检查逻辑，或者我们在这里信任 MarketDataLoader 的增量更新能力
-    # 目前 MarketDataLoader 每次都会去 fetch。
-
     try:
+        # Optimization: In real loop, don't fetch every single second.
+        # But for now we rely on loader.
         data_loader.fetch_and_store(ticker, period="6mo")
     except Exception as e:
         print(f"[错误] 数据获取失败: {e}")
@@ -34,7 +34,7 @@ def run_live_cycle(ticker: str, silent_if_unchanged=False):
     df = market_db.load_data(ticker)
 
     if df.empty:
-        print("[错误] 无法加载市场数据。中止。")
+        print(f"[错误] 无法加载 {ticker} 市场数据。中止。")
         return
 
     latest_price = df.iloc[-1]['Close']
@@ -67,7 +67,8 @@ def run_live_cycle(ticker: str, silent_if_unchanged=False):
         "signal": None,
         "risk_assessment": None,
         "execution_result": None,
-        "critique": None
+        "critique": None,
+        "broker": broker # Inject Broker
     }
 
     # 6. 启动智能体系统
@@ -99,25 +100,46 @@ def run_live_cycle(ticker: str, silent_if_unchanged=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="量化智能体主程序")
     parser.add_argument("--ticker", type=str, default="AAPL", help="股票代码")
+    parser.add_argument("--auto-pick", action="store_true", help="自动选股模式")
     parser.add_argument("--loop", action="store_true", help="启用无限循环模式")
     parser.add_argument("--interval", type=int, default=300, help="循环间隔秒数 (默认 300秒)")
 
     args = parser.parse_args()
 
+    # Init Shared Infrastructure
+    market_db = MarketDB()
+    broker = SimulatedBroker(account_id="live_paper", initial_cash=100000.0, db=market_db)
+
+    targets = []
+
+    if args.auto_pick:
+        print("🔍 启动自动选股 (Scanner)...")
+        scanner = StockScanner(market_db)
+        targets = scanner.scan_market(top_n=3) # Pick top 3
+        if not targets:
+            print("⚠️ 未选出合适标的，回退到默认 ticker")
+            targets = [args.ticker]
+        else:
+            print(f"✅ 自动选中: {targets}")
+            # Ensure we buy them? The Agent loop will handle BUY signal if Strategist likes them.
+            # But Strategist logic is "Trend Following". If Scanner picked them, Strategist should technically like them too.
+    else:
+        targets = [args.ticker]
+
     if args.loop:
-        print(f"🚀 启动无限循环模式，目标: {args.ticker}，间隔: {args.interval}秒")
+        print(f"🚀 启动无限循环模式，监控目标: {targets}，间隔: {args.interval}秒")
         try:
             while True:
-                # 在循环模式下，如果状态未变，保持静默
-                run_live_cycle(args.ticker, silent_if_unchanged=True)
+                for ticker in targets:
+                    run_live_cycle(ticker, broker, market_db, silent_if_unchanged=True)
+                    time.sleep(1) # Small gap between tickers
 
                 # 倒计时显示
-                for i in range(args.interval, 0, -1):
-                    # 如果不是静默输出（即刚跑完一次完整循环），才显示倒计时
-                    # 这里简化处理：总是 sleep
-                    time.sleep(1)
+                # Simply sleep
+                time.sleep(args.interval)
         except KeyboardInterrupt:
             print("\n🛑 用户停止程序。")
             sys.exit(0)
     else:
-        run_live_cycle(args.ticker)
+        for ticker in targets:
+            run_live_cycle(ticker, broker, market_db)

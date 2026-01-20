@@ -37,13 +37,29 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
     atr_indicator = AverageTrueRange(high=high, low=low, close=close, window=14)
     df["ATRr_14"] = atr_indicator.average_true_range()
 
+    # Short-Term Indicators (Amount, Turnover, VWAP)
+    # 均价线 (Intraday VWAP) = Cumulative Amount / Cumulative Volume for the day
+    # Assuming df index is datetime
+    if "Amount" in df.columns and "Volume" in df.columns:
+        # Group by date to reset VWAP daily
+        # Note: This operation might be slow on large DFs, but usually df here is a window
+        try:
+            # Create a day grouper
+            day_groups = df.groupby(df.index.date)
+            df["CumAmount"] = day_groups["Amount"].cumsum()
+            df["CumVolume"] = day_groups["Volume"].cumsum()
+            df["VWAP"] = df["CumAmount"] / df["CumVolume"]
+        except Exception as e:
+            # Fallback if index not datetime or error
+            df["VWAP"] = df["Amount"] / df["Volume"] # Bar Average Price
+
     # 获取最新一行数据
     latest = df.iloc[-1]
 
     # 获取前一行数据用于趋势检测
     prev = df.iloc[-2]
 
-    return {
+    result = {
         "current_price": latest["Close"],
         "rsi_14": latest["RSI_14"],
         "sma_20": latest["SMA_20"],
@@ -52,3 +68,17 @@ def calculate_technical_indicators(df: pd.DataFrame) -> dict:
         "prev_sma_20": prev["SMA_20"],
         "prev_sma_50": prev["SMA_50"]
     }
+
+    if "VWAP" in df.columns:
+        result["vwap"] = latest["VWAP"]
+
+    if "Amount" in df.columns:
+        result["amount"] = latest["Amount"]
+        # Check for volume/amount spike (e.g., > 2 * avg amount of last 20 bars)
+        avg_amt = df["Amount"].rolling(20).mean().iloc[-1]
+        result["amount_ratio"] = latest["Amount"] / avg_amt if avg_amt > 0 else 1.0
+
+    if "Turnover" in df.columns:
+        result["turnover"] = latest["Turnover"]
+
+    return result

@@ -22,6 +22,9 @@ def strategist_node(state: AgentState) -> AgentState:
 
     rsi = analysis["rsi_14"]
     price = analysis["current_price"]
+    vwap = analysis.get("vwap")
+    amount_ratio = analysis.get("amount_ratio", 1.0)
+    turnover = analysis.get("turnover", 0.0)
 
     # 2. 语义分析 (从“漏斗”中提取特征)
     news_list = state.get("news", [])
@@ -31,7 +34,7 @@ def strategist_node(state: AgentState) -> AgentState:
     confidence = semantic_features["confidence"]
     topics = semantic_features["topics"]
 
-    print(f"--- [策略研究员] 技术面: RSI={rsi:.2f} | 语义特征: 情绪={news_score:.2f}, 置信度={confidence:.2f}, 主题={topics} ---")
+    print(f"--- [策略研究员] 技术面: RSI={rsi:.2f}, VWAP={vwap if vwap else 'N/A'}, 放量比={amount_ratio:.2f} | 语义特征: 情绪={news_score:.2f}, 置信度={confidence:.2f} ---")
 
     # 3. 混合决策逻辑 (逻辑驱动)
     signal = {"action": "HOLD", "confidence": 0.0, "reason": "中性市场"}
@@ -39,8 +42,22 @@ def strategist_node(state: AgentState) -> AgentState:
     # --- 基础评分系统 ---
     base_confidence = 0.5
 
+    # 短线逻辑增强
+    # 均价线判断: Price > VWAP (强势)
+    is_above_vwap = (price > vwap) if vwap else False
+    # 放量判断: Amount > 2x Avg
+    is_high_volume = (amount_ratio > 2.0)
+
+    # 规则 0: 短线放量突破 (Short-Term Breakout)
+    if is_high_volume and is_above_vwap and news_score > -0.2:
+        signal = {
+            "action": "BUY",
+            "confidence": 0.75 + (0.1 if news_score > 0.2 else 0),
+            "reason": f"短线放量 (x{amount_ratio:.1f}) 且站上均价线"
+        }
+
     # 规则 1: 财报季动量 (Earnings Momentum)
-    if "Earnings" in topics:
+    elif "Earnings" in topics:
         if news_score > 0.3:
             signal = {
                 "action": "BUY",
@@ -58,10 +75,17 @@ def strategist_node(state: AgentState) -> AgentState:
     elif rsi < 30: # 深度超卖
         # 只要新闻不是极度负面，就尝试抄底
         if news_score > -0.6:
+            # 增强: 如果有放量配合，信心增加
+            conf = 0.7
+            reason = f"深度超卖 (RSI {rsi:.2f})"
+            if is_high_volume:
+                conf += 0.1
+                reason += " 且底部放量"
+
             signal = {
                 "action": "BUY",
-                "confidence": 0.7,
-                "reason": f"深度超卖 (RSI {rsi:.2f}) 且基本面未恶化"
+                "confidence": conf,
+                "reason": reason
             }
     elif rsi > 70: # 超买
          signal = {
@@ -132,8 +156,23 @@ def risk_manager_node(state: AgentState) -> AgentState:
              reason += " (基于历史教训，仓位减半)"
 
     # --- 3. 动态仓位管理 (Volatility Sizing) ---
-    # 假设账户资金 $100,000
-    account_equity = 100000.0
+    # 从 Broker 获取真实账户净值
+    account_equity = 100000.0 # Default fallback
+    broker = state.get("broker")
+    if broker:
+        # Equity = Total Cash (Balance) + Market Value of Positions
+        # But broker.get_total_value() calculates total equity
+        # Ideally we use get_total_value but need to handle pricing context
+        # For simplicity, assuming Broker is up to date or we use Balance
+        # User said: "Current cash ... total equity"
+        try:
+            # Pass current price context for backtest accuracy
+            price_map = {state["ticker"]: price}
+            account_equity = broker.get_total_value(current_prices=price_map)
+        except:
+            acct = broker.get_account_state()
+            if acct: account_equity = float(acct["total_cash"])
+
     risk_per_trade_pct = 0.01 # 单笔亏损不超过 1%
     risk_budget = account_equity * risk_per_trade_pct # $1000
 
@@ -142,10 +181,31 @@ def risk_manager_node(state: AgentState) -> AgentState:
 
     # 凯利公式/波动率平价计算股数
     # Shares = Risk Budget / Risk Per Share
+    target_shares = 0
     if stop_loss_dist > 0:
         target_shares = int(risk_budget / stop_loss_dist)
-    else:
-        target_shares = 0
+
+    # 限制单票最大持仓 (例如 20%)
+    # If Broker available, check existing
+    if broker and approved and signal["action"] == "BUY":
+        current_pos_val = 0
+        positions = broker.get_positions()
+        for p in positions:
+            if p["ticker"] == state["ticker"]:
+                current_pos_val = float(p["quantity"]) * price
+                break
+
+        # Max pos value = 20% equity
+        max_pos_val = account_equity * 0.2
+        avail_space_val = max_pos_val - current_pos_val
+        if avail_space_val <= 0:
+            approved = False
+            reason = "超过单票持仓上限 (20%)"
+            target_shares = 0
+        else:
+            # Cap target shares to available space
+            max_shares = int(avail_space_val / price)
+            target_shares = min(target_shares, max_shares)
 
     # 如果有历史教训，仓位减半
     if caution_flag:
@@ -172,28 +232,48 @@ def executor_node(state: AgentState) -> AgentState:
 
     signal = state["signal"]
     price = state["analysis"]["current_price"]
-
     shares = risk.get("target_shares", 0)
+    broker = state.get("broker")
 
-    # 记录交易到数据库
-    db = TraderDB()
-    db.log_trade(
-        ticker=state["ticker"],
-        action=signal["action"],
-        price=price,
-        shares=shares,
-        reason=signal["reason"]
-    )
+    executed_shares = 0
+    if broker:
+        # 使用 Broker 执行
+        if signal["action"] == "BUY":
+            if broker.submit_order(state["ticker"], "BUY", shares, price=price):
+                executed_shares = shares
+        elif signal["action"] == "SELL":
+            # 卖出逻辑：卖出多少？Risk Manager 应该决定卖出数量
+            # 目前 Risk Manager 只计算 Target Shares (Buying)
+            # 如果是 SELL，通常全卖或卖一半。
+            # 为了简单，如果是 SELL 信号，我们卖出所有可用持仓
+            positions = broker.get_positions()
+            for p in positions:
+                if p["ticker"] == state["ticker"]:
+                    qty = float(p["available_quantity"])
+                    if qty > 0:
+                        if broker.submit_order(state["ticker"], "SELL", qty, price=price):
+                            executed_shares = qty
+    else:
+        executed_shares = shares
+        # Fallback to DB logging only (Legacy)
+        db = TraderDB()
+        db.log_trade(
+            ticker=state["ticker"],
+            action=signal["action"],
+            price=price,
+            shares=shares,
+            reason=signal["reason"]
+        )
 
     result = {
-        "status": "FILLED",
+        "status": "FILLED" if executed_shares > 0 else "SKIPPED",
         "ticker": state["ticker"],
         "action": signal["action"],
         "price": price,
-        "shares": shares
+        "shares": executed_shares
     }
     state["execution_result"] = result
-    print(f"--- [交易执行官] 交易已记录: {signal['action']} @ {price:.2f} ---")
+    print(f"--- [交易执行官] 交易已记录: {signal['action']} {shares} @ {price:.2f} ---")
     return state
 
 def critic_node(state: AgentState) -> AgentState:
