@@ -32,7 +32,7 @@ def archive_minute(test_mode=False):
 
     # Baostock 5-min data usually available from ~2019/2020
     # We try from 2019 to now
-    default_start_year = 2019
+    default_start_year = 2024
     current_year = datetime.datetime.now().year
 
     print(f"[Archive Minute] Starting 5-min archive for {len(tickers)} stocks...", flush=True)

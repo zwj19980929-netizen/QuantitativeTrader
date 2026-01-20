@@ -64,8 +64,8 @@ class EastmoneyClient:
     def kline_minute_history(
             self,
             symbol: str,
-            klt: int = 1,  # 1/5/15/30/60
-            fqt: int = 1,  # 0不复权 1前复权 2后复权
+            klt: int = 1,
+            fqt: int = 1,
             start: str = "20160101",
             end: str = "29991010",
             lmt: int = 3000,
@@ -89,7 +89,7 @@ class EastmoneyClient:
                 "fqt": str(fqt),
                 "end": cur_end,
                 "lmt": str(min(int(lmt), 3000)),
-                # 修复：必须加上 ut 令牌，否则 fields2 中的后半部分（如 amount, turnover）不会返回
+                # 【重要】必须要有这个 ut 令牌，否则字段不全
                 "ut": "fa5fd1943c7b386f172d689348223716"
             }
 
@@ -109,13 +109,14 @@ class EastmoneyClient:
             if yyyymmdd_of(earliest) <= start:
                 break
 
+            # 往前翻页
             cur_end = end_minus_one_day_yyyymmdd(earliest)
 
         if not chunks:
-            # 确保列名与 parsers.py 里的 KLINE_COLS 一致
             return pd.DataFrame(columns=["datetime", "open", "close", "high", "low", "volume", "amount", "amplitude", "pct_chg", "chg", "turnover"])
 
         out = pd.concat(chunks, ignore_index=True)
+        # 去重并排序
         out = out.drop_duplicates(subset=["datetime"]).sort_values("datetime").reset_index(drop=True)
         return out
 
