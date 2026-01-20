@@ -1,65 +1,61 @@
-# A 股分钟数据爬虫 (东方财富数据源)
 
-本模块是一个基于 Python 的自动化工具，用于从东方财富 (EastMoney) 接口获取并存储全 A 股（沪、深、京市）的历史 1 分钟级 K 线数据。
+# A-Share Minute Data Crawler (EastMoney Source)
 
-## 功能特性
+This module allows you to fetch and store historical minute-level (1-minute) data for the entire A-share market (SH/SZ/BJ) using the EastMoney API.
 
-- **全市场覆盖**：支持 5000+ 只 A 股股票的动态获取与数据抓取。
-- **灵活时间窗口**：默认回溯最近 3 个月（约 90 天），支持通过参数自定义历史深度。
-- **断点续传**：具备增量更新逻辑，自动跳过数据库中已是最新数据的股票，方便在中断后恢复。
-- **多维度数据**：完整记录开盘价、最高价、最低价、收盘价、成交量、成交额及换手率。
-- **双数据库支持**：兼容用于生产环境的 **PostgreSQL** 和用于本地测试的 **SQLite**。
+## Features
+- **Full Market Coverage**: Fetches 5000+ A-share tickers.
+- **Adjustable Window**: Defaults to the last 3 months (approx 90 days), but configurable.
+- **Resume Capability**: Skips already up-to-date stocks to enable resuming interrupted runs.
+- **Rich Data**: Stores Open, High, Low, Close, Volume, Amount (成交额), and Turnover (换手率).
+- **Database Storage**: Saves to PostgreSQL (production) or SQLite (local test).
 
-## 环境要求
-
-1. **安装依赖**：
+## Prerequisites
+1. Ensure dependencies are installed:
    ```bash
    pip install pandas requests sqlalchemy psycopg2-binary
    ```
-2. **(可选) 设置数据库连接 URL 环境变量。如果未设置，脚本将默认使用(sqlite:///market_data_local.db)**
+2. (Optional) Set up your database URL environment variable. If not set, it defaults to `sqlite:///market_data_local.db`.
    ```bash
-   export DB_URL="postgresql+psycopg2://用户名:密码@主机:端口/数据库名"
+   export DB_URL="postgresql+psycopg2://user:pass@host:port/dbname"
    ```
-## 使用说明
-1. **抓取全市场最近 3 个月的 1 分钟数据**
 
-   执行以下命令来获取全量 A 股最近 3 个月的数据：
-   ```bash
-   python src/archive_minute_eastmoney.py --all --months 3
-   ```
-   
-- --all: 动态获取全量股票列表。
+## Usage
 
-- --months 3: 指定获取过去 3 个月的数据。
-2. **运行冒烟测试 (沪深 300 权重股)**
+### 1. Fetch 3 Months of 1-Minute Data for ALL A-Shares
+To execute the crawl for the entire market for the last 3 months:
 
-如果你想快速验证环境是否配置成功，可以不加 --all 参数，脚本将仅针对内置的少量样本股进行抓取：
+```bash
+python src/archive_minute_eastmoney.py --all --months 3
+```
+
+- `--all`: Tells the script to fetch the dynamic full list of A-shares from EastMoney (instead of using a small test list).
+- `--months 3`: Sets the start date to 3 months ago.
+
+### 2. Fetch for a Test List (HS300 Top Constituents)
+If you just want to test the connection or setup without downloading everything:
 
 ```bash
 python src/archive_minute_eastmoney.py --months 3
 ```
+(Omit `--all`)
 
-3. **获取更长周期的历史数据**
-
-例如获取过去一年的 1 分钟 K 线：
+### 3. Fetch Longer History (e.g., 12 Months)
 ```bash
 python src/archive_minute_eastmoney.py --all --months 12
 ```
 
-## 数据字典
+## Storage
+Data is stored in the `ohlcv_minute` table in your database.
+Schema:
+- `ticker` (VARCHAR)
+- `date` (TIMESTAMP)
+- `open`, `high`, `low`, `close` (DOUBLE)
+- `volume` (DOUBLE)
+- `amount` (DOUBLE) - 成交额
+- `turnover` (DOUBLE) - 换手率
 
-数据存储于 ohlcv_minute 表中，结构如下：
-
-| 字段名     | 类型      | 说明                         |
-|------------|-----------|------------------------------|
-| ticker     | VARCHAR   | 股票代码（如 000001）        |
-| date       | TIMESTAMP | 交易时间（分钟级）           |
-| open       | DOUBLE    | 开盘价                       |
-| high       | DOUBLE    | 最高价                       |
-| low        | DOUBLE    | 最低价                       |
-| close      | DOUBLE    | 收盘价                       |
-| volume     | DOUBLE    | 成交量（手）                 |
-| amount     | DOUBLE    | 成交额（元）                 |
-| turnover  | DOUBLE    | 换手率（%）                  |
-
-
+## Notes
+- The script handles pagination automatically (EastMoney limits 3000 bars per request).
+- It is single-threaded to avoid aggressive rate limiting. A full run for 5000 stocks * 3 months may take several hours.
+- Logs are written to `archive_minute_eastmoney.log`.
