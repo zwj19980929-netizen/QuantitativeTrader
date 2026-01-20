@@ -80,7 +80,7 @@ python src/archive_minute_eastmoney.py --all --months 3
 ```
 
 **选项 B: 5分钟级数据 (Baostock)**
-拉取 2019 年至今的 5 分钟级别数据。
+拉取 2024 年至今的 5 分钟级别数据。
 ```bash
 python src/archive_minute.py
 ```
