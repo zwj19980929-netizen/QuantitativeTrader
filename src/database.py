@@ -30,13 +30,17 @@ class MarketDB:
             print(f"[MarketDB] 已连接到外部数据库: {safe_url}")
 
         # 优化连接池：解决 "server closed the connection unexpectedly"
+        connect_args = {}
+        if "sqlite" not in self.db_url:
+             connect_args['connect_timeout'] = 10
+
         self.engine = create_engine(
             self.db_url,
             pool_size=10,
             max_overflow=20,
             pool_pre_ping=True,  # 关键：检查连接有效性
             pool_recycle=3600,  # 关键：防止长连接被 RDS 超时切断
-            connect_args={'connect_timeout': 10}
+            connect_args=connect_args
         )
         self._init_tables()
 
